@@ -1,0 +1,39 @@
+[package]
+name = "pglistener"
+version = "1.0.0"
+edition = "2021"
+description = "PostgreSQL LISTEN/NOTIFY logger with GUI"
+
+[dependencies]
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "clipboard", "links", "glow", "wgpu_no_default_features", "x11", "wayland"] }
+egui = { version = "0.37", features = ["monochrome_emoji_fonts"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time", "macros", "io-util"] }
+tokio-postgres = "0.7"
+postgres-native-tls = "0.5"
+native-tls = "0.2"
+futures-util = "0.3"
+russh = { version = "0.64", default-features = false, features = ["flate2", "ring", "rsa"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
+chrono = "0.4"
+rfd = "0.17"
+anyhow = "1"
+aes-gcm = "0.11"
+argon2 = "0.6"
+getrandom = "0.3"
+
+# Рендерер wgpu: на Windows только DirectX 12 (работает и без драйверов GPU, в т.ч. по RDP),
+# на остальных ОС — Vulkan/Metal/OpenGL ES. Если wgpu не стартует, используется OpenGL (glow).
+[target.'cfg(windows)'.dependencies]
+tray-icon = "0.26"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
+wgpu = { version = "30", default-features = false, features = ["dx12", "wgsl", "std"] }
+
+[target.'cfg(not(windows))'.dependencies]
+wgpu = { version = "30", default-features = false, features = ["vulkan", "metal", "gles", "wgsl", "std"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
