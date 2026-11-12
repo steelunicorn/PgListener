@@ -1753,8 +1753,6 @@ impl eframe::App for App {
             self.restore_prompt(&ctx);
         }
         self.error_modal(&ctx);
-        // Чтобы смена суток обрабатывалась даже без новых сообщений.
-        ctx.request_repaint_after(std::time::Duration::from_secs(30));
     }
 }
 
