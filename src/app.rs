@@ -213,14 +213,24 @@ impl View {
         self.cache_seen = self.cache_seen.saturating_sub(extra).min(self.rows.len());
         let removed = old_visible - self.cache.len();
         if removed > 0 {
+            // Текущее совпадение могло съехать вместе со строками: считаем, сколько
+            // совпадений пропало перед ним, и сдвигаем индекс.
+            let before = self
+                .search
+                .matches
+                .iter()
+                .filter(|&&p| p < removed)
+                .count();
             self.search.matches.retain(|&p| p >= removed);
             for p in &mut self.search.matches {
                 *p -= removed;
             }
             self.search.key.4 = self.search.key.4.saturating_sub(removed);
-            if let Some(c) = self.search.current {
-                self.search.current = (c < self.search.matches.len()).then_some(c);
-            }
+            self.search.current = self
+                .search
+                .current
+                .map(|c| c.saturating_sub(before))
+                .filter(|&c| c < self.search.matches.len());
         }
     }
 
@@ -2095,6 +2105,50 @@ mod tests {
             multi_h >= row_h * 3.0 - 2.0,
             "переводы строк должны давать несколько строк: {multi_h} при высоте строки {row_h}"
         );
+    }
+
+    #[test]
+    fn keeps_rows_across_midnight() {
+        // Смена суток не должна очищать окно: строки живут до вытеснения по лимиту.
+        let mut v = View::default();
+        v.push(entry(0, "ch", "до полуночи"));
+        v.push(entry(86_400, "ch", "после полуночи"));
+        assert_eq!(v.rows.len(), 2);
+    }
+
+    #[test]
+    fn trim_keeps_visible_and_search_positions_valid() {
+        let mut v = View::default();
+        for i in 0..MAX_ROWS as i64 {
+            let text = if i % 1000 == 0 { "match" } else { "noise" };
+            v.push(entry(i, "ch", text));
+        }
+        let empty: Vec<String> = Vec::new();
+        v.visible(&empty, &empty);
+        let key = (v.tab.clone(), v.generation, v.filter_version);
+        v.search.query = "match".to_string();
+        v.search.update(&v.rows, &v.cache, key);
+        assert!(v.search.matches.len() > 1);
+
+        for i in 0..3 {
+            let text = if i == 1 { "match" } else { "noise" };
+            v.push(entry(MAX_ROWS as i64 + i, "ch", text));
+        }
+        v.visible(&empty, &empty);
+        assert_eq!(v.rows.len(), MAX_ROWS);
+        for &i in &v.cache {
+            assert!(i < v.rows.len(), "кэш ссылается на вытесненную строку");
+        }
+        for &pos in &v.search.matches {
+            assert!(
+                v.rows[v.cache[pos]].entry.text.contains("match"),
+                "позиция совпадения съехала после вытеснения строк"
+            );
+        }
+        if let Some(c) = v.search.current {
+            let pos = v.search.matches[c];
+            assert!(v.rows[v.cache[pos]].entry.text.contains("match"));
+        }
     }
 }
 
