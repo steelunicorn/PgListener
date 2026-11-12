@@ -2,10 +2,9 @@ use crate::model::*;
 use crate::storage::{Lock, Storage};
 use crate::tray::{Tray, TrayCmd};
 use crate::worker::{self, EventSink};
-use chrono::{Local, NaiveDate};
 use egui::text::LayoutJob;
 use egui::{Color32, FontId, RichText, TextFormat};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{mpsc, Arc, Mutex};
 use tokio::sync::mpsc::UnboundedSender;
@@ -13,6 +12,17 @@ use tokio::sync::mpsc::UnboundedSender;
 const GREEN: Color32 = Color32::from_rgb(60, 180, 75);
 const ORANGE: Color32 = Color32::from_rgb(230, 150, 30);
 const GRAY: Color32 = Color32::from_rgb(140, 140, 140);
+
+/// Сколько последних сообщений хранится в окне одного подключения.
+const MAX_ROWS: usize = 20_000;
+
+/// Параметры, от которых зависят высоты строк (ключ кэша высот).
+#[derive(Clone, Copy, PartialEq)]
+struct HeightsKey {
+    all_tab: bool,
+    ch_width: usize,
+    width_bits: u32,
+}
 
 struct Live {
     session: u64,
@@ -23,13 +33,14 @@ struct Live {
 struct Row {
     entry: LogEntry,
     lower: String,
-    /// Текст в одну строку (переводы строк заменены на ¶).
+    /// Текст сообщения как есть: переводы строк сохраняются и отображаются.
     line: String,
 }
 
 impl Row {
     fn new(entry: LogEntry) -> Self {
-        let line = entry.text.replace("\r\n", "\n").replace('\n', " ¶ ");
+        // Разные виды переводов строк приводим к «\n», сами строки не склеиваем.
+        let line = entry.text.replace("\r\n", "\n").replace('\r', "\n");
         Self {
             lower: entry.text.to_lowercase(),
             line,
@@ -55,6 +66,9 @@ struct View {
     search: Search,
     /// Сколько строк было показано в прошлом кадре.
     drawn: usize,
+    /// Высоты строк с переносами при текущих ширине и раскладке.
+    heights: Vec<f32>,
+    heights_key: Option<HeightsKey>,
 }
 
 /// Поиск по показанным строкам.
@@ -142,21 +156,72 @@ impl View {
             self.generation += 1;
             let pos = self.rows.partition_point(|r| r.entry.time <= e.time);
             self.rows.insert(pos, Row::new(e));
+            self.heights.clear();
+            self.heights_key = None;
         } else {
             self.rows.push(Row::new(e));
         }
+        self.trim();
     }
 
-    fn replace_channel(&mut self, channel: &str, entries: Vec<LogEntry>) {
-        self.rows.retain(|r| &*r.entry.channel != channel);
-        self.rows.extend(entries.into_iter().map(Row::new));
-        self.rows.sort_by_key(|r| r.entry.time);
-        self.generation += 1;
+    /// Добавляет историю канала к уже показанным строкам; повторы пропускаются.
+    fn merge_channel(&mut self, channel: &str, entries: Vec<LogEntry>) {
+        let mut known: HashSet<(chrono::NaiveDateTime, String)> = self
+            .rows
+            .iter()
+            .filter(|r| &*r.entry.channel == channel)
+            .map(|r| (r.entry.time, r.entry.text.clone()))
+            .collect();
+        let mut added = 0;
+        for e in entries {
+            if known.insert((e.time, e.text.clone())) {
+                self.rows.push(Row::new(e));
+                added += 1;
+            }
+        }
+        if added > 0 {
+            self.rows.sort_by_key(|r| r.entry.time);
+            self.generation += 1;
+            self.heights.clear();
+            self.heights_key = None;
+        }
+        self.trim();
     }
 
-    fn retain_day(&mut self, day: NaiveDate) {
-        self.rows.retain(|r| r.entry.time.date() == day);
-        self.generation += 1;
+    /// Оставляет последние `MAX_ROWS` строк, сдвигая индексы кэшей.
+    ///
+    /// `generation` при этом не меняется: показанные строки — подмножество прежних,
+    /// поэтому инкрементальные кэши (`visible` и поиск) остаются верными, и на каждом
+    /// новом сообщении не приходится заново просматривать весь лог.
+    fn trim(&mut self) {
+        let extra = self.rows.len().saturating_sub(MAX_ROWS);
+        if extra == 0 {
+            return;
+        }
+        self.rows.drain(..extra);
+        if self.heights.len() >= extra {
+            self.heights.drain(..extra);
+        } else {
+            self.heights.clear();
+            self.heights_key = None;
+        }
+        let old_visible = self.cache.len();
+        self.cache.retain(|&i| i >= extra);
+        for i in &mut self.cache {
+            *i -= extra;
+        }
+        self.cache_seen = self.cache_seen.saturating_sub(extra).min(self.rows.len());
+        let removed = old_visible - self.cache.len();
+        if removed > 0 {
+            self.search.matches.retain(|&p| p >= removed);
+            for p in &mut self.search.matches {
+                *p -= removed;
+            }
+            self.search.key.4 = self.search.key.4.saturating_sub(removed);
+            if let Some(c) = self.search.current {
+                self.search.current = (c < self.search.matches.len()).then_some(c);
+            }
+        }
     }
 
     fn visible(&mut self, filters: &[String], includes: &[String]) -> &[usize] {
@@ -268,7 +333,6 @@ pub struct App {
     dialog: Option<Dialog>,
     restore: Vec<i64>,
     error: Option<String>,
-    today: NaiveDate,
     unlock: Option<UnlockPrompt>,
     tray: Option<Tray>,
     minimize_to_tray: bool,
@@ -355,7 +419,6 @@ impl App {
             dialog: None,
             restore: Vec::new(),
             error: None,
-            today: Local::now().date_naive(),
             unlock: None,
             tray: Tray::new(&cc.egui_ctx),
             minimize_to_tray: true,
@@ -526,7 +589,7 @@ impl App {
                 }
                 Event::Entry(id, e) => self.views.entry(id).or_default().push(e),
                 Event::History(id, ch, entries) => {
-                    self.views.entry(id).or_default().replace_channel(&ch, entries)
+                    self.views.entry(id).or_default().merge_channel(&ch, entries)
                 }
                 Event::TestResult(r) => {
                     if let Some(Dialog::Conn(d)) = &mut self.dialog {
@@ -534,13 +597,6 @@ impl App {
                         d.test = Some(r);
                     }
                 }
-            }
-        }
-        let today = Local::now().date_naive();
-        if today != self.today {
-            self.today = today;
-            for v in self.views.values_mut() {
-                v.retain_day(today);
             }
         }
     }
@@ -848,6 +904,8 @@ impl App {
                 let v = self.views.entry(id).or_default();
                 v.rows.clear();
                 v.generation += 1;
+                v.heights.clear();
+                v.heights_key = None;
             }
         });
         ui.separator();
@@ -930,6 +988,8 @@ impl App {
             search,
             tab,
             drawn,
+            heights,
+            heights_key,
             ..
         } = view;
         // Прилипание к концу лога срабатывает по размеру прошлого кадра, поэтому после
@@ -943,8 +1003,6 @@ impl App {
         ui.separator();
 
         let all_tab = tab.is_none();
-        let font = FontId::monospace(13.0);
-        let row_h = ui.fonts_mut(|f| f.row_height(&font));
         let ch_width = cfg
             .channels
             .iter()
@@ -955,67 +1013,128 @@ impl App {
         let dark = ui.visuals().dark_mode;
         let text_color = ui.visuals().text_color();
 
-        ui.label(
-            RichText::new(format!("Строк за сегодня: {total}, показано: {}", visible.len()))
-                .small()
-                .color(GRAY),
-        );
+        let counter = if total >= MAX_ROWS {
+            format!(
+                "Строк в окне: {} (хранятся последние), показано: {}",
+                fmt_count(total),
+                visible.len()
+            )
+        } else {
+            format!(
+                "Строк в окне: {}, показано: {}",
+                fmt_count(total),
+                visible.len()
+            )
+        };
+        ui.label(RichText::new(counter).small().color(GRAY));
+
         let mut copy: Option<String> = None;
         let query = search.query.to_lowercase();
         let current_pos = search.current.map(|c| search.matches[c]);
         let jump = search.scroll_to.take();
         // На кадре перехода к совпадению отключаем прилипание к концу, иначе оно перебьёт прокрутку.
-        let mut area = egui::ScrollArea::both()
+        egui::ScrollArea::vertical()
             .auto_shrink([false, false])
-            .stick_to_bottom(jump.is_none());
-        if let Some(pos) = jump {
-            // Строку с совпадением ставим примерно в середину области.
-            let step = row_h + ui.spacing().item_spacing.y;
-            let offset = pos as f32 * step - ui.available_height() / 2.0;
-            area = area.vertical_scroll_offset(offset.max(0.0));
-        }
-        area.show_rows(ui, row_h, visible.len(), |ui, range| {
-                let first = range.start;
-                for (k, &i) in visible[range].iter().enumerate() {
-                    let row = &rows[i];
-                    let is_current = current_pos == Some(first + k);
-                    let mut job = LayoutJob::default();
-                    let fmt = |c: Color32| TextFormat::simple(font.clone(), c);
-                    job.append(
-                        &row.entry.time.format("%H:%M:%S%.3f  ").to_string(),
-                        0.0,
-                        fmt(GRAY),
-                    );
-                    if all_tab {
-                        let ch: &str = &row.entry.channel;
-                        let (name, c) = if ch.is_empty() {
-                            ("*", ORANGE)
-                        } else {
-                            (ch, channel_color(ch, dark))
-                        };
-                        job.append(&format!("{name:<ch_width$}  "), 0.0, fmt(c));
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+            .stick_to_bottom(jump.is_none())
+            .show_viewport(ui, |ui, viewport| {
+                // Ширина берётся до отрисовки: полоса прокрутки всегда занимает место,
+                // поэтому перенос не «дёргается» при появлении/исчезновении строк.
+                let width = ui.available_width().max(1.0);
+                let key = HeightsKey {
+                    all_tab,
+                    ch_width,
+                    width_bits: width.to_bits(),
+                };
+                ensure_heights(heights, heights_key, rows, ui, key);
+                let spacing = ui.spacing().item_spacing.y;
+                let count = visible.len();
+                let mut total_h = spacing * count as f32;
+                for &i in visible.iter() {
+                    total_h += heights[i];
+                }
+                ui.set_height(total_h);
+
+                let left = ui.max_rect().left();
+                let top = ui.max_rect().top();
+
+                // Первая и последняя строки, попавшие в видимую область.
+                let mut first = 0;
+                let mut first_y = 0.0f32;
+                while first < count {
+                    let h = heights[visible[first]] + spacing;
+                    if first_y + h > viewport.min.y {
+                        break;
                     }
-                    let c = if row.entry.channel.is_empty() { ORANGE } else { text_color };
-                    append_highlighted(&mut job, &row.line, &query, marked, fmt(c), is_current);
-                    let r = ui.add(
-                        egui::Label::new(job)
-                            .wrap_mode(egui::TextWrapMode::Extend)
-                            .sense(egui::Sense::click()),
+                    first_y += h;
+                    first += 1;
+                }
+                let mut last = first;
+                let mut y = first_y;
+                while last < count {
+                    if y >= viewport.max.y {
+                        break;
+                    }
+                    y += heights[visible[last]] + spacing;
+                    last += 1;
+                }
+
+                if let Some(pos) = jump {
+                    if pos < count {
+                        let mut y = 0.0f32;
+                        for &i in &visible[..pos] {
+                            y += heights[i] + spacing;
+                        }
+                        let h = heights[visible[pos]];
+                        // Прямоугольник — в экранных координатах содержимого.
+                        ui.scroll_to_rect(
+                            egui::Rect::from_min_size(
+                                egui::pos2(left, top + y),
+                                egui::vec2(width, h),
+                            ),
+                            Some(egui::Align::Center),
+                        );
+                    }
+                }
+
+                let mut y = first_y;
+                for pos in first..last {
+                    let i = visible[pos];
+                    let h = heights[i];
+                    let rect =
+                        egui::Rect::from_min_size(egui::pos2(left, top + y), egui::vec2(width, h));
+                    y += h + spacing;
+                    let is_current = current_pos == Some(pos);
+                    let job = row_job(
+                        &rows[i], all_tab, ch_width, dark, text_color, &query, marked, is_current,
+                        width,
                     );
-                    r.context_menu(|ui| {
-                        if ui.button("Копировать строку").clicked() {
-                            copy = Some(format_entry(&row.entry));
-                        }
-                        if ui.button("Копировать все показанные строки").clicked() {
-                            copy = Some(
-                                visible
-                                    .iter()
-                                    .map(|&i| format_entry(&rows[i].entry))
-                                    .collect::<Vec<_>>()
-                                    .join("\n"),
+                    ui.scope_builder(
+                        egui::UiBuilder::new()
+                            .max_rect(rect)
+                            .layout(egui::Layout::top_down(egui::Align::Min)),
+                        |ui| {
+                            let r = ui.add(
+                                egui::Label::new(job)
+                                    .wrap_mode(egui::TextWrapMode::Wrap)
+                                    .sense(egui::Sense::click()),
                             );
-                        }
-                    });
+                            r.context_menu(|ui| {
+                                if ui.button("Копировать строку").clicked() {
+                                    copy = Some(format_entry(&rows[i].entry));
+                                }
+                                if ui.button("Копировать все показанные строки").clicked() {
+                                    copy = Some(
+                                        visible
+                                            .iter()
+                                            .map(|&i| format_entry(&rows[i].entry))
+                                            .collect::<Vec<_>>()
+                                            .join("\n"),
+                                    );
+                                }
+                            });
+                        },
+                    );
                 }
             });
         if let Some(text) = copy {
@@ -1781,6 +1900,84 @@ fn append_highlighted(
     }
 }
 
+/// Текст строки лога: дата и время, канал (на вкладке «Все») и сообщение.
+/// Длинные строки переносятся по ширине `wrap_width`.
+#[allow(clippy::too_many_arguments)]
+fn row_job(
+    row: &Row,
+    all_tab: bool,
+    ch_width: usize,
+    dark: bool,
+    text_color: Color32,
+    query: &str,
+    marked: &str,
+    is_current: bool,
+    wrap_width: f32,
+) -> LayoutJob {
+    let font = FontId::monospace(13.0);
+    let fmt = |c: Color32| TextFormat::simple(font.clone(), c);
+    let mut job = LayoutJob::default();
+    job.wrap.max_width = wrap_width;
+    job.append(
+        &row.entry.time.format("%d.%m %H:%M:%S%.3f  ").to_string(),
+        0.0,
+        fmt(GRAY),
+    );
+    if all_tab {
+        let ch: &str = &row.entry.channel;
+        let (name, c) = if ch.is_empty() {
+            ("*", ORANGE)
+        } else {
+            (ch, channel_color(ch, dark))
+        };
+        job.append(&format!("{name:<ch_width$}  "), 0.0, fmt(c));
+    }
+    let c = if row.entry.channel.is_empty() {
+        ORANGE
+    } else {
+        text_color
+    };
+    append_highlighted(&mut job, &row.line, query, marked, fmt(c), is_current);
+    job
+}
+
+/// Досчитывает высоты строк (с учётом переноса) для текущих ширины и раскладки.
+fn ensure_heights(
+    heights: &mut Vec<f32>,
+    heights_key: &mut Option<HeightsKey>,
+    rows: &[Row],
+    ui: &egui::Ui,
+    key: HeightsKey,
+) {
+    if *heights_key != Some(key) {
+        heights.clear();
+        *heights_key = Some(key);
+    }
+    if heights.len() >= rows.len() {
+        return;
+    }
+    let dark = ui.visuals().dark_mode;
+    let text_color = ui.visuals().text_color();
+    let width = f32::from_bits(key.width_bits);
+    heights.reserve(rows.len() - heights.len());
+    let mut i = heights.len();
+    while i < rows.len() {
+        let job = row_job(
+            &rows[i],
+            key.all_tab,
+            key.ch_width,
+            dark,
+            text_color,
+            "",
+            "",
+            false,
+            width,
+        );
+        heights.push(ui.fonts_mut(|fonts| fonts.layout_job(job)).size().y);
+        i += 1;
+    }
+}
+
 fn status_dot(ui: &mut egui::Ui, color: Color32) -> egui::Response {
     let size = egui::vec2(10.0, ui.spacing().interact_size.y);
     let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::hover());
@@ -1800,6 +1997,19 @@ fn format_entry(e: &LogEntry) -> String {
     format!("{} {} {}", e.time.format("%Y-%m-%d %H:%M:%S%.3f"), ch, e.text)
 }
 
+/// 20000 → «20 000».
+fn fmt_count(n: usize) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(' ');
+        }
+        out.push(ch);
+    }
+    out
+}
+
 fn open_folder(dir: &std::path::Path) {
     #[cfg(windows)]
     let cmd = "explorer";
@@ -1808,5 +2018,83 @@ fn open_folder(dir: &std::path::Path) {
     #[cfg(all(unix, not(target_os = "macos")))]
     let cmd = "xdg-open";
     let _ = std::process::Command::new(cmd).arg(dir).spawn();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn time(secs: i64) -> chrono::NaiveDateTime {
+        chrono::DateTime::from_timestamp(secs, 0)
+            .expect("valid timestamp")
+            .naive_utc()
+    }
+
+    fn entry(secs: i64, channel: &str, text: &str) -> LogEntry {
+        LogEntry {
+            time: time(secs),
+            channel: Arc::from(channel),
+            text: text.to_string(),
+        }
+    }
+
+    #[test]
+    fn row_keeps_newlines() {
+        let r = Row::new(entry(0, "", "a\r\nb\nc"));
+        assert_eq!(r.line, "a\nb\nc");
+        assert_eq!(r.lower, "a\r\nb\nc");
+    }
+
+    #[test]
+    fn push_keeps_only_last_rows() {
+        let mut v = View::default();
+        for i in 0..MAX_ROWS as i64 + 5 {
+            v.push(entry(i, "", "x"));
+        }
+        assert_eq!(v.rows.len(), MAX_ROWS);
+        assert_eq!(v.rows[0].entry.time, time(5));
+        assert_eq!(v.rows[MAX_ROWS - 1].entry.time, time(MAX_ROWS as i64 + 4));
+    }
+
+    #[test]
+    fn merge_channel_skips_duplicates() {
+        let mut v = View::default();
+        v.push(entry(0, "a", "one"));
+        v.push(entry(2, "b", "other"));
+        let history = vec![entry(0, "a", "one"), entry(1, "a", "two")];
+        v.merge_channel("a", history.clone());
+        v.merge_channel("a", history);
+        let texts: Vec<&str> = v.rows.iter().map(|r| r.line.as_str()).collect();
+        assert_eq!(texts, ["one", "two", "other"]);
+    }
+
+    #[test]
+    fn long_line_wraps_and_newlines_add_rows() {
+        let ctx = egui::Context::default();
+        let long = Row::new(entry(0, "ch", &"word ".repeat(80)));
+        let multi = Row::new(entry(0, "ch", "one\ntwo\nthree"));
+        let (mut long_h, mut multi_h, mut row_h) = (0.0f32, 0.0f32, 0.0f32);
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let width = 160.0;
+            let layout = |r: &Row| {
+                let job = row_job(r, false, 6, true, Color32::WHITE, "", "", false, width);
+                ui.fonts_mut(|f| f.layout_job(job)).size().y
+            };
+            long_h = layout(&long);
+            multi_h = layout(&multi);
+            row_h = ui.fonts_mut(|f| f.row_height(&FontId::monospace(13.0)));
+        });
+        // Кадр не выводится на экран: дельты текстур нужно «погасить», иначе egui паникует.
+        out.textures_delta.clear();
+        assert!(row_h > 0.0);
+        assert!(
+            long_h > row_h * 2.0,
+            "длинная строка должна переноситься: {long_h} при высоте строки {row_h}"
+        );
+        assert!(
+            multi_h >= row_h * 3.0 - 2.0,
+            "переводы строк должны давать несколько строк: {multi_h} при высоте строки {row_h}"
+        );
+    }
 }
 
