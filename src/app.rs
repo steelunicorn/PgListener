@@ -18,6 +18,53 @@ const HACK_GREEN: Color32 = Color32::from_rgb(80, 188, 102);
 const HACK_DIM: Color32 = Color32::from_rgb(48, 118, 64);
 const HACK_LIME: Color32 = Color32::from_rgb(150, 196, 96);
 
+/// Чем рисуется окно.
+struct RenderInfo {
+    /// «OpenGL 4.6 · NVIDIA GeForce …» или «DirectX 12 · Microsoft Basic Render Driver».
+    text: String,
+    /// Рисует процессор (WARP, llvmpipe и т. п.), а не видеокарта.
+    software: bool,
+}
+
+impl RenderInfo {
+    fn detect(cc: &eframe::CreationContext<'_>) -> Self {
+        if let Some(rs) = &cc.wgpu_render_state {
+            let info = rs.adapter.get_info();
+            let backend = match info.backend {
+                eframe::wgpu::Backend::Dx12 => "DirectX 12".to_string(),
+                b => format!("{b:?}"),
+            };
+            return Self {
+                software: info.device_type == eframe::wgpu::DeviceType::Cpu
+                    || info.name.contains("Basic Render"),
+                text: format!("{backend} · {}", info.name),
+            };
+        }
+        if let Some(gl) = &cc.gl {
+            use eframe::glow::HasContext;
+            // SAFETY: строки только читаются из уже созданного контекста OpenGL.
+            let (renderer, version) = unsafe {
+                (
+                    gl.get_parameter_string(eframe::glow::RENDERER),
+                    gl.get_parameter_string(eframe::glow::VERSION),
+                )
+            };
+            let version = version.split_whitespace().next().unwrap_or("").to_string();
+            let lower = renderer.to_lowercase();
+            return Self {
+                software: ["llvmpipe", "softpipe", "swrast", "gdi generic", "basic render"]
+                    .iter()
+                    .any(|s| lower.contains(s)),
+                text: format!("OpenGL {version} · {renderer}"),
+            };
+        }
+        Self {
+            text: "неизвестно".into(),
+            software: false,
+        }
+    }
+}
+
 /// Оформление интерфейса.
 #[derive(Clone, Copy, PartialEq)]
 enum UiTheme {
@@ -617,6 +664,8 @@ pub struct App {
     theme: UiTheme,
     /// Показывать служебные сообщения приложения в логе.
     show_system: bool,
+    /// Чем рисуется окно: рендерер и видеокарта; `software` — без видеокарты.
+    render: RenderInfo,
     /// В этом кадре нажат Esc при открытом диалоге: диалог закрывается как по «Отмена».
     esc: bool,
     /// Высоты верхних и нижних блоков левой [0] и центральной [1] панелей:
@@ -715,6 +764,7 @@ impl App {
             minimize_to_tray: true,
             theme: UiTheme::System,
             show_system: true,
+            render: RenderInfo::detect(cc),
             esc: false,
             top_h: [0.0; 2],
             bottom_h: [0.0; 2],
@@ -1141,6 +1191,24 @@ impl App {
             toggle_switch(ui, &mut system)
                 .on_hover_text("Сообщения самого PgListener (подключение, ошибки) в окне лога");
         });
+        ui.separator();
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.label(RichText::new("Отрисовка:").small().weak());
+            ui.label(RichText::new(&self.render.text).small().weak());
+        })
+        .response
+        .on_hover_text(
+            "OpenGL используется, если он есть; иначе DirectX 12. \
+             Принудительно: переменная окружения PGLISTENER_RENDERER=opengl или dx12.",
+        );
+        if self.render.software {
+            ui.label(
+                RichText::new("Видеокарта не используется: окно рисует процессор, это заметно его нагружает.")
+                    .small()
+                    .color(ui.visuals().warn_fg_color),
+            );
+        }
         if theme != self.theme {
             self.theme = theme;
             theme.apply(ui.ctx());

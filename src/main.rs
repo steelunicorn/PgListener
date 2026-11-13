@@ -50,13 +50,26 @@ fn run(renderer: eframe::Renderer) -> eframe::Result {
 }
 
 fn main() {
-    // Сначала wgpu (на Windows — DirectX 12), при неудаче — OpenGL.
-    let result = match run(eframe::Renderer::Wgpu) {
-        Err(eframe::Error::Wgpu(e)) => {
-            eprintln!("wgpu недоступен ({e}), переключаюсь на OpenGL");
-            run(eframe::Renderer::Glow)
-        }
-        r => r,
+    // Сначала OpenGL: на машине с видеокартой он тратит столько же процессора, сколько
+    // DirectX 12, а памяти втрое меньше. Если OpenGL нет (RDP, виртуальная машина без
+    // 3D-драйвера, где Windows даёт только OpenGL 1.1), переключаемся на wgpu
+    // (на Windows — DirectX 12, без видеокарты — программный WARP).
+    // PGLISTENER_RENDERER=opengl|dx12 выбирает рендерер принудительно.
+    let forced = std::env::var("PGLISTENER_RENDERER").unwrap_or_default().to_lowercase();
+    let result = match forced.as_str() {
+        "dx12" | "wgpu" => run(eframe::Renderer::Wgpu),
+        "opengl" | "glow" => run(eframe::Renderer::Glow),
+        _ => match run(eframe::Renderer::Glow) {
+            Err(
+                e @ (eframe::Error::Glutin(_)
+                | eframe::Error::NoGlutinConfigs(..)
+                | eframe::Error::OpenGL(_)),
+            ) => {
+                eprintln!("OpenGL недоступен ({e}), переключаюсь на DirectX 12");
+                run(eframe::Renderer::Wgpu)
+            }
+            r => r,
+        },
     };
     if let Err(e) = result {
         rfd::MessageDialog::new()

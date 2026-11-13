@@ -21,8 +21,8 @@ aes-gcm = "0.11"
 argon2 = "0.6"
 getrandom = "0.3"
 
-# Рендерер wgpu: на Windows только DirectX 12 (работает и без драйверов GPU, в т.ч. по RDP),
-# на остальных ОС — Vulkan/Metal/OpenGL ES. Если wgpu не стартует, используется OpenGL (glow).
+# Основной рендерер — OpenGL (glow). Запасной — wgpu: на Windows только DirectX 12
+# (работает и без драйверов GPU, в т.ч. по RDP), на остальных ОС — Vulkan/Metal/OpenGL ES.
 [target.'cfg(windows)'.dependencies]
 tray-icon = "0.26"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
