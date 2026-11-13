@@ -13,6 +13,190 @@ const GREEN: Color32 = Color32::from_rgb(60, 180, 75);
 const ORANGE: Color32 = Color32::from_rgb(230, 150, 30);
 const GRAY: Color32 = Color32::from_rgb(140, 140, 140);
 
+/// Цвета «хакерской» темы: приглушённый зелёный на зеленовато-чёрном, как в «Матрице».
+const HACK_GREEN: Color32 = Color32::from_rgb(80, 188, 102);
+const HACK_DIM: Color32 = Color32::from_rgb(48, 118, 64);
+const HACK_LIME: Color32 = Color32::from_rgb(150, 196, 96);
+
+/// Оформление интерфейса.
+#[derive(Clone, Copy, PartialEq)]
+enum UiTheme {
+    System,
+    Light,
+    Dark,
+    Hacker,
+}
+
+impl UiTheme {
+    const ALL: [UiTheme; 4] = [UiTheme::System, UiTheme::Light, UiTheme::Dark, UiTheme::Hacker];
+
+    fn key(self) -> &'static str {
+        match self {
+            UiTheme::System => "system",
+            UiTheme::Light => "light",
+            UiTheme::Dark => "dark",
+            UiTheme::Hacker => "hacker",
+        }
+    }
+
+    fn from_key(key: Option<&str>) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|t| Some(t.key()) == key)
+            .unwrap_or(UiTheme::System)
+    }
+
+    fn icon(self) -> RichText {
+        match self {
+            UiTheme::System => RichText::new("💻"),
+            UiTheme::Light => RichText::new("☀"),
+            UiTheme::Dark => RichText::new("🌙"),
+            UiTheme::Hacker => RichText::new(">_").monospace().strong(),
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            UiTheme::System => "Как в системе",
+            UiTheme::Light => "Светлая",
+            UiTheme::Dark => "Тёмная",
+            UiTheme::Hacker => "Хакерская",
+        }
+    }
+
+    fn apply(self, ctx: &egui::Context) {
+        let dark = if self == UiTheme::Hacker {
+            hacker_visuals()
+        } else {
+            egui::Visuals::dark()
+        };
+        ctx.set_visuals_of(egui::Theme::Dark, dark);
+        ctx.set_theme(match self {
+            UiTheme::System => egui::ThemePreference::System,
+            UiTheme::Light => egui::ThemePreference::Light,
+            UiTheme::Dark | UiTheme::Hacker => egui::ThemePreference::Dark,
+        });
+    }
+}
+
+/// Тёмная тема egui, перекрашенная в приглушённый зелёный на зеленовато-чёрном фоне.
+fn hacker_visuals() -> egui::Visuals {
+    use egui::Stroke;
+    let rgb = Color32::from_rgb;
+    let panel = rgb(10, 18, 12);
+    let raised = rgb(15, 27, 18);
+    let sunken = rgb(6, 12, 8);
+    let border = rgb(30, 58, 36);
+    let mut v = egui::Visuals::dark();
+    v.override_text_color = Some(HACK_GREEN);
+    v.weak_text_color = Some(HACK_DIM);
+    v.panel_fill = panel;
+    v.window_fill = raised;
+    v.extreme_bg_color = sunken;
+    v.text_edit_bg_color = Some(sunken);
+    v.faint_bg_color = raised;
+    v.code_bg_color = raised;
+    v.hyperlink_color = HACK_LIME;
+    v.window_stroke = Stroke::new(1.0, border);
+    v.selection.bg_fill = rgb(30, 80, 44);
+    v.selection.stroke = Stroke::new(1.0, rgb(150, 220, 160));
+    let w = &mut v.widgets;
+    for (wv, bg, edge, fg) in [
+        (&mut w.noninteractive, panel, border, HACK_DIM),
+        (&mut w.inactive, rgb(20, 38, 25), border, HACK_GREEN),
+        (&mut w.hovered, rgb(27, 52, 34), HACK_DIM, HACK_GREEN),
+        (&mut w.active, rgb(35, 70, 44), HACK_GREEN, HACK_GREEN),
+        (&mut w.open, rgb(24, 46, 30), HACK_DIM, HACK_GREEN),
+    ] {
+        wv.bg_fill = bg;
+        wv.weak_bg_fill = bg;
+        wv.bg_stroke = Stroke::new(1.0, edge);
+        wv.fg_stroke = Stroke::new(wv.fg_stroke.width, fg);
+    }
+    v
+}
+
+/// Цвета строк лога для текущей темы.
+#[derive(Clone, Copy)]
+struct LogPalette {
+    dark: bool,
+    hacker: bool,
+    text: Color32,
+}
+
+impl LogPalette {
+    fn new(visuals: &egui::Visuals, hacker: bool) -> Self {
+        Self {
+            dark: visuals.dark_mode,
+            hacker,
+            text: if hacker { HACK_GREEN } else { visuals.text_color() },
+        }
+    }
+
+    fn time(self) -> Color32 {
+        if self.hacker { HACK_DIM } else { GRAY }
+    }
+
+    /// Строки без канала (служебные сообщения).
+    fn special(self) -> Color32 {
+        if self.hacker { HACK_LIME } else { ORANGE }
+    }
+
+    /// Фон вхождений выделенного текста.
+    fn mark_bg(self) -> Color32 {
+        if self.hacker {
+            Color32::from_rgb(70, 160, 90)
+        } else {
+            Color32::from_rgb(140, 200, 255)
+        }
+    }
+
+    /// Фон подсветки k-го поискового запроса; текст на нём чёрный.
+    fn term_bg(self, k: usize) -> Color32 {
+        const BRIGHT: [Color32; 6] = [
+            Color32::from_rgb(255, 222, 90),
+            Color32::from_rgb(150, 228, 140),
+            Color32::from_rgb(255, 168, 196),
+            Color32::from_rgb(255, 184, 110),
+            Color32::from_rgb(200, 176, 255),
+            Color32::from_rgb(120, 222, 205),
+        ];
+        const MUTED: [Color32; 6] = [
+            Color32::from_rgb(196, 176, 70),
+            Color32::from_rgb(110, 176, 104),
+            Color32::from_rgb(190, 120, 150),
+            Color32::from_rgb(200, 140, 80),
+            Color32::from_rgb(150, 136, 200),
+            Color32::from_rgb(90, 170, 156),
+        ];
+        let set = if self.hacker { &MUTED } else { &BRIGHT };
+        set[k % set.len()]
+    }
+
+    /// Подложка строки с текущим совпадением поиска.
+    fn current_row(self) -> Color32 {
+        if self.hacker {
+            Color32::from_rgb(28, 56, 34)
+        } else if self.dark {
+            Color32::from_rgb(70, 62, 30)
+        } else {
+            Color32::from_rgb(255, 238, 200)
+        }
+    }
+
+    fn channel(self, ch: &str) -> Color32 {
+        let h = ch.bytes().fold(5381u32, |h, b| h.wrapping_mul(33) ^ b as u32);
+        if self.hacker {
+            // Оттенки от жёлто-зелёного до бирюзового.
+            let hue = (75 + h % 90) as f32 / 360.0;
+            return egui::ecolor::Hsva::new(hue, 0.55, 0.78, 1.0).into();
+        }
+        let hue = (h % 360) as f32 / 360.0;
+        let (s, v) = if self.dark { (0.55, 0.95) } else { (0.75, 0.6) };
+        egui::ecolor::Hsva::new(hue, s, v, 1.0).into()
+    }
+}
+
 /// Сколько последних сообщений хранится в окне одного подключения.
 const MAX_ROWS: usize = 20_000;
 
@@ -31,6 +215,9 @@ struct Live {
 }
 
 struct Row {
+    /// Постоянный номер строки: по нему egui узнаёт строку при прокрутке,
+    /// чтобы выделение мышью двигалось вместе с ней, а не оставалось на месте экрана.
+    uid: u64,
     entry: LogEntry,
     lower: String,
     /// Текст сообщения как есть: переводы строк сохраняются и отображаются.
@@ -41,7 +228,9 @@ impl Row {
     fn new(entry: LogEntry) -> Self {
         // Разные виды переводов строк приводим к «\n», сами строки не склеиваем.
         let line = entry.text.replace("\r\n", "\n").replace('\r', "\n");
+        static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         Self {
+            uid: NEXT_UID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             lower: entry.text.to_lowercase(),
             line,
             entry,
@@ -55,12 +244,16 @@ struct View {
     /// Растёт, когда строки меняются не только добавлением в конец.
     generation: u64,
     filter_version: u64,
-    /// None — вкладка «Все».
-    tab: Option<Arc<str>>,
+    /// Каналы, строки которых не показываются.
+    hidden: HashSet<Arc<str>>,
+    /// Скрывать служебные сообщения приложения.
+    hide_system: bool,
+    /// Растёт при каждом изменении `hidden` и `hide_system`.
+    channels_version: u64,
     filter_input: String,
     include_input: String,
     channel_input: String,
-    cache_key: (Option<Arc<str>>, u64, u64),
+    cache_key: (u64, u64, u64),
     cache_seen: usize,
     cache: Vec<usize>,
     search: Search,
@@ -71,33 +264,46 @@ struct View {
     heights_key: Option<HeightsKey>,
 }
 
-/// Поиск по показанным строкам.
+/// Поиск по показанным строкам. Запросов может быть несколько, у каждого свой цвет.
 #[derive(Default)]
 struct Search {
+    /// Текст в поле поиска (ещё не закреплённый Enter).
     query: String,
+    /// Закреплённые запросы.
+    terms: Vec<String>,
     /// Позиции совпавших строк в списке показанных.
     matches: Vec<usize>,
     /// Текущее совпадение (индекс в `matches`).
     current: Option<usize>,
-    key: (String, Option<Arc<str>>, u64, u64, usize),
+    key: (String, u64, u64, u64, usize),
     /// Прокрутить к этой позиции на следующем кадре.
     scroll_to: Option<usize>,
 }
 
 impl Search {
-    /// Пересчитывает совпадения, если изменился запрос или набор показанных строк.
-    fn update(&mut self, rows: &[Row], visible: &[usize], key: (Option<Arc<str>>, u64, u64)) {
-        if self.query == self.key.0
-            && (&key.0, key.1, key.2) == (&self.key.1, self.key.2, self.key.3)
+    /// Запросы в нижнем регистре: закреплённые, затем текст из поля.
+    fn patterns(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.terms.iter().map(|t| t.to_lowercase()).collect();
+        if !self.query.is_empty() {
+            v.push(self.query.to_lowercase());
+        }
+        v
+    }
+
+    /// Пересчитывает совпадения, если изменились запросы или набор показанных строк.
+    fn update(&mut self, rows: &[Row], visible: &[usize], key: (u64, u64, u64)) {
+        let pats = self.patterns();
+        let sig = pats.join("\0");
+        let hit = |i: usize| pats.iter().any(|p| rows[i].lower.contains(p.as_str()));
+        if sig == self.key.0
+            && (key.0, key.1, key.2) == (self.key.1, self.key.2, self.key.3)
             && visible.len() >= self.key.4
         {
             // Строки только добавились в конец: проверяем лишь новые, позиции старых не меняются.
             let seen = self.key.4;
-            if visible.len() > seen && !self.query.is_empty() {
-                let q = self.query.to_lowercase();
-                self.matches.extend(
-                    (seen..visible.len()).filter(|&pos| rows[visible[pos]].lower.contains(q.as_str())),
-                );
+            if visible.len() > seen && !pats.is_empty() {
+                self.matches
+                    .extend((seen..visible.len()).filter(|&pos| hit(visible[pos])));
                 if self.current.is_none() {
                     self.current = self.matches.len().checked_sub(1);
                 }
@@ -105,23 +311,18 @@ impl Search {
             self.key.4 = visible.len();
             return;
         }
-        let key = (self.query.clone(), key.0, key.1, key.2, visible.len());
-        let query_changed = key.0 != self.key.0;
+        let query_changed = sig != self.key.0;
         let current_row = self
             .current
             .and_then(|c| self.matches.get(c))
             .and_then(|&pos| visible.get(pos).copied());
-        self.key = key;
-        self.matches.clear();
-        let q = self.query.to_lowercase();
-        if !q.is_empty() {
-            self.matches = visible
-                .iter()
-                .enumerate()
-                .filter(|(_, &i)| rows[i].lower.contains(q.as_str()))
-                .map(|(pos, _)| pos)
-                .collect();
-        }
+        self.matches = visible
+            .iter()
+            .enumerate()
+            .filter(|(_, &i)| hit(i))
+            .map(|(pos, _)| pos)
+            .collect();
+        self.key = (sig, key.0, key.1, key.2, visible.len());
         if query_changed {
             // Новый запрос: встаём на самое свежее совпадение.
             self.current = self.matches.len().checked_sub(1);
@@ -132,6 +333,31 @@ impl Search {
                 .and_then(|row| self.matches.iter().position(|&pos| visible[pos] == row))
                 .or(self.matches.len().checked_sub(1));
         }
+    }
+
+    /// Переходит к следующему (`forward`) или предыдущему совпадению только запроса `k`,
+    /// считая от текущего совпадения; по краям переходит на другой конец.
+    fn step_term(&mut self, rows: &[Row], visible: &[usize], k: usize, forward: bool) {
+        let Some(term) = self.terms.get(k) else { return };
+        let p = term.to_lowercase();
+        let hits: Vec<usize> = (0..self.matches.len())
+            .filter(|&m| {
+                visible
+                    .get(self.matches[m])
+                    .is_some_and(|&i| rows[i].lower.contains(p.as_str()))
+            })
+            .collect();
+        let (Some(&first), Some(&last)) = (hits.first(), hits.last()) else {
+            return;
+        };
+        let next = match self.current {
+            None if forward => first,
+            None => last,
+            Some(c) if forward => hits.iter().copied().find(|&m| m > c).unwrap_or(first),
+            Some(c) => hits.iter().rev().copied().find(|&m| m < c).unwrap_or(last),
+        };
+        self.current = Some(next);
+        self.scroll_to = Some(self.matches[next]);
     }
 
     fn step(&mut self, forward: bool) {
@@ -234,8 +460,50 @@ impl View {
         }
     }
 
-    fn visible(&mut self, filters: &[String], includes: &[String]) -> &[usize] {
-        let key = (self.tab.clone(), self.generation, self.filter_version);
+    /// Скрывает или снова показывает строки канала.
+    fn set_hidden(&mut self, ch: &str, hide: bool) {
+        let changed = if hide {
+            self.hidden.insert(Arc::from(ch))
+        } else {
+            self.hidden.remove(ch)
+        };
+        if changed {
+            self.channels_version += 1;
+        }
+    }
+
+    fn show_all_channels(&mut self) {
+        if !self.hidden.is_empty() {
+            self.hidden.clear();
+            self.channels_version += 1;
+        }
+    }
+
+    /// Оставляет видимым только канал `ch`.
+    fn show_only(&mut self, channels: &[String], ch: &str) {
+        self.hidden = channels
+            .iter()
+            .filter(|c| c.as_str() != ch)
+            .map(|c| Arc::from(c.as_str()))
+            .collect();
+        self.channels_version += 1;
+    }
+
+    /// Забывает скрытые каналы, которых больше нет в настройках подключения.
+    fn retain_hidden(&mut self, channels: &[String]) {
+        let before = self.hidden.len();
+        self.hidden.retain(|h| channels.iter().any(|c| c.as_str() == &**h));
+        if self.hidden.len() != before {
+            self.channels_version += 1;
+        }
+    }
+
+    fn visible(&mut self, filters: &[String], includes: &[String], show_system: bool) -> &[usize] {
+        if self.hide_system == show_system {
+            self.hide_system = !show_system;
+            self.channels_version += 1;
+        }
+        let key = (self.channels_version, self.generation, self.filter_version);
         if key != self.cache_key {
             self.cache_key = key;
             self.cache.clear();
@@ -244,10 +512,10 @@ impl View {
         let lower: Vec<String> = filters.iter().map(|f| f.to_lowercase()).collect();
         let include: Vec<String> = includes.iter().map(|f| f.to_lowercase()).collect();
         for (i, r) in self.rows.iter().enumerate().skip(self.cache_seen) {
-            if let Some(t) = &self.tab {
-                if *r.entry.channel != **t {
-                    continue;
-                }
+            if self.hidden.contains(&*r.entry.channel)
+                || (self.hide_system && r.entry.channel.is_empty())
+            {
+                continue;
             }
             if lower.iter().any(|f| r.lower.contains(f.as_str())) {
                 continue;
@@ -346,11 +614,24 @@ pub struct App {
     unlock: Option<UnlockPrompt>,
     tray: Option<Tray>,
     minimize_to_tray: bool,
+    theme: UiTheme,
+    /// Показывать служебные сообщения приложения в логе.
+    show_system: bool,
+    /// В этом кадре нажат Esc при открытом диалоге: диалог закрывается как по «Отмена».
+    esc: bool,
+    /// Высоты верхних и нижних блоков левой [0] и центральной [1] панелей:
+    /// блоки тянутся до большей из двух, чтобы разделители шли на одном уровне.
+    top_h: [f32; 2],
+    /// Высота строки каналов внизу центральной панели (используется только [1]).
+    bottom_h: [f32; 2],
     hidden: bool,
     /// Выделение, о котором egui сообщил в конце прошлого кадра.
     settled: Arc<Mutex<Option<String>>>,
     /// Выделенный в логе текст (в нижнем регистре), его вхождения подсвечиваются.
     marked: String,
+    /// Был щелчок или Esc: если после него выделения нет, подсветку снимаем.
+    /// Само по себе исчезновение выделения (строка ушла за край при прокрутке) подсветку не снимает.
+    deselect_pending: bool,
 }
 
 /// Применяет прокрутку колесом мыши за один кадр. egui растягивает каждый щелчок колеса
@@ -432,13 +713,22 @@ impl App {
             unlock: None,
             tray: Tray::new(&cc.egui_ctx),
             minimize_to_tray: true,
+            theme: UiTheme::System,
+            show_system: true,
+            esc: false,
+            top_h: [0.0; 2],
+            bottom_h: [0.0; 2],
             hidden: false,
             settled: Arc::default(),
             marked: String::new(),
+            deselect_pending: false,
         };
         cc.egui_ctx.add_plugin(SelectionWatch(app.settled.clone()));
         cc.egui_ctx.add_plugin(InstantWheel);
         app.minimize_to_tray = app.storage.setting("minimize_to_tray").as_deref() != Some("0");
+        app.theme = UiTheme::from_key(app.storage.setting("theme").as_deref());
+        app.show_system = app.storage.setting("show_system").as_deref() != Some("0");
+        app.theme.apply(&cc.egui_ctx);
         if app.storage.lock_state() == Lock::Locked && !app.storage.unlock_remembered() {
             app.unlock = Some(UnlockPrompt::default());
         }
@@ -566,9 +856,7 @@ impl App {
             let _ = l.tx.send(Cmd::Unlisten(name.to_string()));
         }
         if let Some(v) = self.views.get_mut(&id) {
-            if v.tab.as_deref() == Some(name) {
-                v.tab = None;
-            }
+            v.set_hidden(name, false);
         }
     }
 
@@ -806,7 +1094,7 @@ impl App {
         }
     }
 
-    fn left_panel(&self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+    fn left_buttons(&self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
         ui.horizontal(|ui| {
             if ui.button("➕ Подключение").clicked() {
                 actions.push(Action::NewConn(None));
@@ -822,7 +1110,56 @@ impl App {
                 actions.push(Action::Master);
             }
         });
-        ui.separator();
+    }
+
+    /// Кнопка ⚙ с окошком настроек приложения.
+    fn settings_button(&mut self, ui: &mut egui::Ui) {
+        let resp = ui
+            .add(egui::Button::new(RichText::new("⚙").size(17.0)).frame(false))
+            .on_hover_text("Настройки");
+        egui::Popup::from_toggle_button_response(&resp)
+            .align(egui::RectAlign::BOTTOM_END)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| self.settings_popup(ui));
+    }
+
+    fn settings_popup(&mut self, ui: &mut egui::Ui) {
+        let mut theme = self.theme;
+        let mut tray = self.minimize_to_tray;
+        let mut system = self.show_system;
+        ui.set_width(300.0);
+        setting_row(ui, "Тема", |ui| {
+            let options = UiTheme::ALL.map(|t| (t, t.icon(), t.label()));
+            segmented(ui, &mut theme, &options);
+        });
+        if self.tray.is_some() {
+            setting_row(ui, "Сворачивать в трей", |ui| {
+                toggle_switch(ui, &mut tray);
+            });
+        }
+        setting_row(ui, "Системные сообщения", |ui| {
+            toggle_switch(ui, &mut system)
+                .on_hover_text("Сообщения самого PgListener (подключение, ошибки) в окне лога");
+        });
+        if theme != self.theme {
+            self.theme = theme;
+            theme.apply(ui.ctx());
+            let r = self.storage.set_setting("theme", theme.key());
+            self.report(r);
+        }
+        if tray != self.minimize_to_tray {
+            self.minimize_to_tray = tray;
+            let r = self.storage.set_setting("minimize_to_tray", if tray { "1" } else { "0" });
+            self.report(r);
+        }
+        if system != self.show_system {
+            self.show_system = system;
+            let r = self.storage.set_setting("show_system", if system { "1" } else { "0" });
+            self.report(r);
+        }
+    }
+
+    fn left_tree(&self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
         let r = egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -848,44 +1185,60 @@ impl App {
             .plugin::<egui::text_selection::LabelSelectionState>()
             .lock()
             .has_selection();
+        if ctx.input(|i| i.pointer.primary_pressed() || i.key_pressed(egui::Key::Escape)) {
+            self.deselect_pending = true;
+        }
         let settled = self.settled.lock().unwrap().take();
-        if !has_selection {
-            self.marked.clear();
-        } else if let Some(text) = settled {
+        if let Some(text) = settled {
             // Выделение через несколько строк или из одних пробелов не подсвечиваем.
             self.marked = if text.contains('\n') || text.trim().is_empty() {
                 String::new()
             } else {
                 text.to_lowercase()
             };
+            self.deselect_pending = false;
+        } else if !has_selection && self.deselect_pending {
+            // egui сбрасывает выделение и когда выделенная строка уходит за край при прокрутке,
+            // поэтому подсветку снимаем только после щелчка или Esc.
+            self.marked.clear();
+            self.deselect_pending = false;
         }
     }
 
-    fn central(&mut self, ui: &mut egui::Ui) {
-        let Some(id) = self.selected else {
-            ui.centered_and_justified(|ui| {
-                ui.label("Создайте подключение кнопкой «➕ Подключение» слева");
-            });
-            return;
-        };
-        let Some(cfg) = self.conn(id).cloned() else {
+    /// Выбранное подключение, если оно есть.
+    fn selected_conn(&mut self) -> Option<(i64, ConnConfig)> {
+        let id = self.selected?;
+        let cfg = self.conn(id).cloned();
+        if cfg.is_none() {
             self.selected = None;
+        }
+        cfg.map(|c| (id, c))
+    }
+
+    /// Заголовок подключения и кнопки управления им.
+    fn central_header(&mut self, ui: &mut egui::Ui) {
+        let conn = self.selected_conn();
+        let status = conn.as_ref().map(|(id, _)| self.status(*id));
+        ui.horizontal(|ui| {
+            if let (Some((_, cfg)), Some(status)) = (&conn, &status) {
+                let (color, hint) = status_look(status);
+                ui.heading(&cfg.name);
+                status_dot(ui, color);
+                ui.label(RichText::new(hint).color(color));
+                if cfg.bridge.enabled && *status != ConnStatus::Disconnected {
+                    ui.label(
+                        RichText::new(format!("· мост {}:{}", cfg.bridge.listen, cfg.bridge.port))
+                            .color(GRAY),
+                    );
+                }
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                self.settings_button(ui)
+            });
+        });
+        let (Some((id, cfg)), Some(status)) = (conn, status) else {
             return;
         };
-        let status = self.status(id);
-        let (color, hint) = status_look(&status);
-
-        ui.horizontal(|ui| {
-            ui.heading(&cfg.name);
-            status_dot(ui, color);
-            ui.label(RichText::new(hint).color(color));
-            if cfg.bridge.enabled && status != ConnStatus::Disconnected {
-                ui.label(
-                    RichText::new(format!("· мост {}:{}", cfg.bridge.listen, cfg.bridge.port))
-                        .color(GRAY),
-                );
-            }
-        });
         ui.horizontal(|ui| {
             if status == ConnStatus::Disconnected {
                 if ui.button("▶ Подключить").clicked() {
@@ -918,29 +1271,32 @@ impl App {
                 v.heights_key = None;
             }
         });
-        ui.separator();
+    }
 
-        // Каналы и вкладки.
+    /// Переключатели каналов: какие показывать в логе. Здесь же добавление и удаление каналов.
+    fn channels_row(&mut self, ui: &mut egui::Ui) {
+        let Some((id, cfg)) = self.selected_conn() else {
+            return;
+        };
         let mut remove_channel = None;
         let mut add_channel = None;
         {
             let view = self.views.entry(id).or_default();
             ui.horizontal_wrapped(|ui| {
-                ui.label("Каналы:");
-                if ui.selectable_label(view.tab.is_none(), "Все").clicked() {
-                    view.tab = None;
+                if ui
+                    .selectable_label(view.hidden.is_empty(), "Все")
+                    .on_hover_text("Показывать все каналы")
+                    .clicked()
+                {
+                    view.show_all_channels();
                 }
                 for ch in &cfg.channels {
-                    let sel = view.tab.as_deref() == Some(ch.as_str());
-                    if ui.selectable_label(sel, ch).clicked() {
-                        view.tab = Some(Arc::from(ch.as_str()));
-                    }
-                    if ui
-                        .small_button("✖")
-                        .on_hover_text(format!("Перестать слушать «{ch}»"))
-                        .clicked()
-                    {
-                        remove_channel = Some(ch.clone());
+                    let on = !view.hidden.contains(ch.as_str());
+                    match channel_chip(ui, ch, on) {
+                        Some(ChipAction::Toggle) => view.set_hidden(ch, on),
+                        Some(ChipAction::Only) => view.show_only(&cfg.channels, ch),
+                        Some(ChipAction::Remove) => remove_channel = Some(ch.clone()),
+                        None => {}
                     }
                 }
                 let r = ui.add(
@@ -948,9 +1304,9 @@ impl App {
                         .hint_text("новый канал")
                         .desired_width(140.0),
                 );
-                let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if ui.button("➕").on_hover_text("Слушать канал").clicked() || enter {
+                if enter_pressed(ui, &r) && !view.channel_input.trim().is_empty() {
                     add_channel = Some(std::mem::take(&mut view.channel_input));
+                    r.request_focus();
                 }
             });
         }
@@ -960,25 +1316,46 @@ impl App {
         if let Some(ch) = add_channel {
             self.add_channel(id, &ch);
         }
+    }
 
-        // Фильтры и поиск.
+    /// Фильтры, поиск и сам лог.
+    fn central(&mut self, ui: &mut egui::Ui) {
+        let Some((id, cfg)) = self.selected_conn() else {
+            ui.centered_and_justified(|ui| {
+                ui.label("Создайте подключение кнопкой «➕ Подключение» слева");
+            });
+            return;
+        };
+
+        // Фильтры и поиск: подписи слева, за вертикальной чертой — поля и применённые значения.
         let mut filters = cfg.filters.clone();
         let mut includes = cfg.includes.clone();
+        let labels = ["Показывать вхождения", "Скрывать вхождения", "Поиск"];
+        let label_w = labels
+            .iter()
+            .map(|l| {
+                ui.painter()
+                    .layout_no_wrap(l.to_string(), egui::TextStyle::Body.resolve(ui.style()), Color32::PLACEHOLDER)
+                    .size()
+                    .x
+            })
+            .fold(0.0, f32::max);
+        let block_top = ui.cursor().top();
         let changed = {
             let view = self.views.entry(id).or_default();
-            let a = filter_row(
+            let a = labeled_row(
                 ui,
-                "Показывать только строки с:",
+                label_w,
+                labels[0],
                 "Если задано, показываются только строки, содержащие любую из подстрок. Регистр не учитывается.",
-                &mut includes,
-                &mut view.include_input,
+                |ui| filter_items(ui, &mut includes, &mut view.include_input),
             );
-            let b = filter_row(
+            let b = labeled_row(
                 ui,
-                "Скрывать строки с:",
+                label_w,
+                labels[1],
                 "Строки, содержащие любую из подстрок, не показываются. Регистр не учитывается.",
-                &mut filters,
-                &mut view.filter_input,
+                |ui| filter_items(ui, &mut filters, &mut view.filter_input),
             );
             a || b
         };
@@ -987,16 +1364,18 @@ impl App {
         }
 
         self.update_marked(ui.ctx());
+        let pal = LogPalette::new(ui.visuals(), self.theme == UiTheme::Hacker);
+        let show_system = self.show_system;
         let marked = &self.marked;
         let view = self.views.entry(id).or_default();
         let total = view.rows.len();
-        let cache_key = (view.tab.clone(), view.generation, view.filter_version);
-        view.visible(&filters, &includes);
+        view.visible(&filters, &includes, show_system);
+        let cache_key = (view.channels_version, view.generation, view.filter_version);
         let View {
             rows,
             cache: visible,
             search,
-            tab,
+            hidden,
             drawn,
             heights,
             heights_key,
@@ -1009,10 +1388,27 @@ impl App {
             ui.ctx().request_repaint();
         }
         search.update(rows, visible, cache_key);
-        search_row(ui, search);
+        labeled_row(
+            ui,
+            label_w,
+            labels[2],
+            "Enter закрепляет запрос, у каждого запроса свой цвет. Enter в пустом поле — следующее совпадение.",
+            |ui| search_items(ui, search, pal, rows, visible),
+        );
+        // Вертикальная черта между подписями и полями.
+        let x = ui.max_rect().left() + label_w + LABEL_GAP / 2.0;
+        let bottom = ui.cursor().top() - ui.spacing().item_spacing.y;
+        ui.painter()
+            .vline(x, block_top..=bottom, ui.visuals().widgets.noninteractive.bg_stroke);
         ui.separator();
 
-        let all_tab = tab.is_none();
+        // Колонка канала нужна, если показывается больше одного канала.
+        let all_tab = cfg
+            .channels
+            .iter()
+            .filter(|c| !hidden.contains(c.as_str()))
+            .count()
+            != 1;
         let ch_width = cfg
             .channels
             .iter()
@@ -1020,9 +1416,6 @@ impl App {
             .max()
             .unwrap_or(0)
             .max(6);
-        let dark = ui.visuals().dark_mode;
-        let text_color = ui.visuals().text_color();
-
         let counter = if total >= MAX_ROWS {
             format!(
                 "Строк в окне: {} (хранятся последние), показано: {}",
@@ -1039,7 +1432,7 @@ impl App {
         ui.label(RichText::new(counter).small().color(GRAY));
 
         let mut copy: Option<String> = None;
-        let query = search.query.to_lowercase();
+        let patterns = search.patterns();
         let current_pos = search.current.map(|c| search.matches[c]);
         let jump = search.scroll_to.take();
         // На кадре перехода к совпадению отключаем прилипание к концу, иначе оно перебьёт прокрутку.
@@ -1056,7 +1449,7 @@ impl App {
                     ch_width,
                     width_bits: width.to_bits(),
                 };
-                ensure_heights(heights, heights_key, rows, ui, key);
+                ensure_heights(heights, heights_key, rows, ui, key, pal);
                 let spacing = ui.spacing().item_spacing.y;
                 let count = visible.len();
                 let mut total_h = spacing * count as f32;
@@ -1114,13 +1507,18 @@ impl App {
                     let rect =
                         egui::Rect::from_min_size(egui::pos2(left, top + y), egui::vec2(width, h));
                     y += h + spacing;
-                    let is_current = current_pos == Some(pos);
-                    let job = row_job(
-                        &rows[i], all_tab, ch_width, dark, text_color, &query, marked, is_current,
-                        width,
-                    );
+                    if current_pos == Some(pos) {
+                        // Текущее совпадение поиска — подложка под всей строкой.
+                        ui.painter().rect_filled(
+                            rect.expand2(egui::vec2(2.0, 1.0)),
+                            3.0,
+                            pal.current_row(),
+                        );
+                    }
+                    let job = row_job(&rows[i], all_tab, ch_width, pal, &patterns, marked, width);
                     ui.scope_builder(
                         egui::UiBuilder::new()
+                            .scope_id(egui::Id::unique(("log_row", rows[i].uid)))
                             .max_rect(rect)
                             .layout(egui::Layout::top_down(egui::Align::Min)),
                         |ui| {
@@ -1220,6 +1618,9 @@ impl App {
                     }
                 });
             });
+        if std::mem::take(&mut self.esc) {
+            keep = false;
+        }
         if let Some(new) = action {
             let r = self.storage.set_master(new.as_deref(), d.remember);
             self.report(r);
@@ -1272,6 +1673,9 @@ impl App {
                 });
             }
         });
+        if p.confirm_reset && std::mem::take(&mut self.esc) {
+            p.confirm_reset = false;
+        }
         if submit {
             let (pw, remember) = (p.password.clone(), p.remember);
             match self.storage.unlock(&pw, remember) {
@@ -1462,27 +1866,28 @@ impl App {
                 ui.separator();
                 ui.label("Прослушиваемые каналы (изменения применяются сразу после сохранения, без переподключения):");
                 ui.horizontal_wrapped(|ui| {
+                    let r = ui.add(
+                        egui::TextEdit::singleline(&mut d.new_channel)
+                            .hint_text("новый канал, Enter")
+                            .desired_width(140.0),
+                    );
+                    if enter_pressed(ui, &r) && !d.new_channel.trim().is_empty() {
+                        let ch = std::mem::take(&mut d.new_channel).trim().to_string();
+                        if !c.channels.contains(&ch) {
+                            c.channels.push(ch);
+                            c.channels.sort();
+                        }
+                        r.request_focus();
+                    }
                     let mut remove = None;
                     for (i, ch) in c.channels.iter().enumerate() {
-                        if ui.button(format!("{ch} ✖")).clicked() {
+                        let (_, x) = x_chip(ui, ch, "", "Убрать канал", plain_chip_colors);
+                        if x.clicked() {
                             remove = Some(i);
                         }
                     }
                     if let Some(i) = remove {
                         c.channels.remove(i);
-                    }
-                    let r = ui.add(
-                        egui::TextEdit::singleline(&mut d.new_channel)
-                            .hint_text("новый канал")
-                            .desired_width(140.0),
-                    );
-                    let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    if ui.button("➕").clicked() || enter {
-                        let ch = std::mem::take(&mut d.new_channel).trim().to_string();
-                        if !ch.is_empty() && !c.channels.contains(&ch) {
-                            c.channels.push(ch);
-                            c.channels.sort();
-                        }
                     }
                 });
 
@@ -1519,6 +1924,10 @@ impl App {
                 });
             });
 
+        if std::mem::take(&mut self.esc) {
+            keep = false;
+            save = false;
+        }
         if save {
             d.cfg.bridge.allow = crate::bridge::split_allow(&d.allow_text);
             d.cfg.bridge.listen = d.cfg.bridge.listen.trim().to_string();
@@ -1546,9 +1955,7 @@ impl App {
                     }
                 }
                 if let Some(v) = self.views.get_mut(&id) {
-                    if v.tab.as_ref().is_some_and(|t| !cfg.channels.iter().any(|c| **c == **t)) {
-                        v.tab = None;
-                    }
+                    v.retain_hidden(&cfg.channels);
                 }
                 self.selected = Some(id);
                 // Мост живёт вместе с подключением, поэтому новые настройки моста
@@ -1587,6 +1994,10 @@ impl App {
                     }
                 });
             });
+        if std::mem::take(&mut self.esc) {
+            keep = false;
+            ok = false;
+        }
         if ok && !f.name.trim().is_empty() {
             f.name = f.name.trim().to_string();
             let r = self.storage.save_folder(&f);
@@ -1621,6 +2032,9 @@ impl App {
                 }
             });
         });
+        if std::mem::take(&mut self.esc) {
+            result = Some(false);
+        }
         match result {
             None => Some(Dialog::Delete(t)),
             Some(false) => None,
@@ -1669,6 +2083,9 @@ impl App {
                 }
             });
         });
+        if std::mem::take(&mut self.esc) {
+            result = Some(false);
+        }
         match result {
             Some(true) => {
                 for id in std::mem::take(&mut self.restore) {
@@ -1728,23 +2145,47 @@ impl eframe::App for App {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        // Esc закрывает верхний открытый диалог так же, как «Отмена».
+        let any_dialog = self.error.is_some()
+            || self.dialog.is_some()
+            || self.unlock.is_some()
+            || !self.restore.is_empty();
+        if any_dialog && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            if self.error.is_some() {
+                self.error = None;
+            } else {
+                self.esc = true;
+            }
+        }
         let mut actions = Vec::new();
+        // Одинаковые поля у обеих панелей, чтобы их блоки начинались на одной высоте.
+        let margin = egui::Margin::same(8);
+        let mut top_h = self.top_h;
+        let mut bottom_h = self.bottom_h;
         egui::Panel::left("tree")
-            .resizable(true)
-            .default_size(260.0)
+            .resizable(false)
+            .exact_size(260.0)
+            .frame(egui::Frame::side_top_panel(ui.style()).inner_margin(margin))
             .show(ui, |ui| {
-                if self.tray.is_some()
-                    && ui
-                        .checkbox(&mut self.minimize_to_tray, "Сворачивать в трей")
-                        .changed()
-                {
-                    let v = if self.minimize_to_tray { "1" } else { "0" };
-                    let r = self.storage.set_setting("minimize_to_tray", v);
-                    self.report(r);
-                }
-                self.left_panel(ui, &mut actions)
+                even_block(ui, &mut top_h, 0, |ui| self.left_buttons(ui, &mut actions));
+                ui.separator();
+                self.left_tree(ui, &mut actions);
             });
-        egui::CentralPanel::default().show(ui, |ui| self.central(ui));
+        egui::CentralPanel::default()
+            .frame(egui::Frame::central_panel(ui.style()).inner_margin(margin))
+            .show(ui, |ui| {
+                even_block(ui, &mut top_h, 1, |ui| self.central_header(ui));
+                ui.separator();
+                ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+                    even_block(ui, &mut bottom_h, 1, |ui| self.channels_row(ui));
+                    ui.separator();
+                    ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                        self.central(ui)
+                    });
+                });
+            });
+        self.top_h = top_h;
+        self.bottom_h = bottom_h;
         for a in actions {
             self.apply(a);
         }
@@ -1753,7 +2194,276 @@ impl eframe::App for App {
             self.restore_prompt(&ctx);
         }
         self.error_modal(&ctx);
+        self.esc = false;
     }
+}
+
+/// Блок, который тянется до высоты такого же блока соседней панели.
+/// `heights` — высоты содержимого блоков обеих панелей, `slot` — номер этой панели.
+fn even_block(ui: &mut egui::Ui, heights: &mut [f32; 2], slot: usize, add: impl FnOnce(&mut egui::Ui)) {
+    let target = heights[0].max(heights[1]);
+    let width = ui.available_width();
+    ui.allocate_ui_with_layout(
+        egui::vec2(width, target),
+        egui::Layout::top_down(egui::Align::Min),
+        |ui| {
+            ui.set_min_width(width);
+            let h = ui.scope(add).response.rect.height();
+            if (h - heights[slot]).abs() > 0.5 {
+                heights[slot] = h;
+                ui.ctx().request_repaint();
+            }
+            // Дотягиваем блок до общей высоты, считая от его верха
+            // (add_space и set_min_height отсчитывают от курсора и добавляют отступ).
+            ui.expand_to_include_y(ui.max_rect().top() + target);
+        },
+    );
+}
+
+enum ChipAction {
+    Toggle,
+    Only,
+    Remove,
+}
+
+/// Чип с текстом и крестиком внутри. `colors(ui, hovered)` даёт фон, цвет текста и рамку.
+/// Возвращает ответы самого чипа и зоны крестика.
+fn x_chip(
+    ui: &mut egui::Ui,
+    name: &str,
+    hint: &str,
+    x_hint: &str,
+    colors: impl FnOnce(&egui::Ui, bool) -> (Color32, Color32, egui::Stroke),
+) -> (egui::Response, egui::Response) {
+    let (resp, mut icons) = icon_chip(ui, name, hint, &[("✖", x_hint)], colors);
+    (resp, icons.remove(0))
+}
+
+/// Чип с текстом и кнопками-значками у правого края (последний — крестик удаления).
+/// Зоны значков перекрывают чип, поэтому щелчок по ним не доходит до самого чипа.
+/// Возвращает ответ чипа и ответы значков в том же порядке.
+fn icon_chip(
+    ui: &mut egui::Ui,
+    name: &str,
+    hint: &str,
+    icons: &[(&str, &str)],
+    colors: impl FnOnce(&egui::Ui, bool) -> (Color32, Color32, egui::Stroke),
+) -> (egui::Response, Vec<egui::Response>) {
+    let pad = ui.spacing().button_padding;
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let painter = ui.painter();
+    let name_g = painter.layout_no_wrap(name.to_owned(), font.clone(), Color32::PLACEHOLDER);
+    let icon_g: Vec<_> = icons
+        .iter()
+        .map(|(icon, _)| painter.layout_no_wrap(icon.to_string(), font.clone(), Color32::PLACEHOLDER))
+        .collect();
+    let gap = 6.0;
+    // Ширина зоны значка: сам значок и по половине промежутка с каждой стороны.
+    let zone_w = |g: &std::sync::Arc<egui::Galley>| g.size().x + gap;
+    let icons_w: f32 = icon_g.iter().map(zone_w).sum();
+    let text_h = icon_g.iter().map(|g| g.size().y).fold(name_g.size().y, f32::max);
+    let size = egui::vec2(
+        pad.x + name_g.size().x + gap / 2.0 + icons_w + pad.x - gap / 2.0,
+        (text_h + 2.0 * pad.y).max(ui.spacing().interact_size.y),
+    );
+    let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+    let mut x = rect.right() - pad.x + gap / 2.0 - icons_w;
+    let mut zones = Vec::with_capacity(icons.len());
+    for (k, ((_, icon_hint), g)) in icons.iter().zip(&icon_g).enumerate() {
+        // Последняя зона (крестик) захватывает и правое поле чипа.
+        let right = if k + 1 == icons.len() { rect.right() } else { x + zone_w(g) };
+        let zone = egui::Rect::from_min_max(egui::pos2(x, rect.top()), egui::pos2(right, rect.bottom()));
+        x += zone_w(g);
+        let r = ui
+            .interact(zone, resp.id.with(("icon", k)), egui::Sense::click())
+            .on_hover_text(*icon_hint);
+        zones.push(r);
+    }
+    let resp = if hint.is_empty() { resp } else { resp.on_hover_text(hint) };
+    if ui.is_rect_visible(rect) {
+        let hovered = resp.hovered() || zones.iter().any(|z| z.hovered());
+        let (fill, fg, stroke) = colors(ui, hovered);
+        let radius = ui.visuals().widgets.inactive.corner_radius;
+        let painter = ui.painter();
+        painter.rect(rect, radius, fill, stroke, egui::StrokeKind::Inside);
+        let text_y = rect.center().y - name_g.size().y / 2.0;
+        painter.galley(egui::pos2(rect.left() + pad.x, text_y), name_g, fg);
+        let last = zones.len().saturating_sub(1);
+        for (k, (z, g)) in zones.iter().zip(icon_g).enumerate() {
+            let color = if z.hovered() && k == last {
+                ui.visuals().error_fg_color
+            } else {
+                fg
+            };
+            if z.hovered() && k != last {
+                // Наведённый значок-кнопка — лёгкая подложка его цветом.
+                painter.rect_filled(z.rect.shrink2(egui::vec2(1.0, 3.0)), 3.0, fg.gamma_multiply(0.18));
+            }
+            let pos = egui::pos2(
+                z.rect.center().x - g.size().x / 2.0,
+                rect.center().y - g.size().y / 2.0,
+            );
+            painter.galley(pos, g, color);
+        }
+    }
+    (resp, zones)
+}
+
+/// Обычные цвета чипа: как у кнопки.
+fn plain_chip_colors(ui: &egui::Ui, hovered: bool) -> (Color32, Color32, egui::Stroke) {
+    let wv = if hovered {
+        ui.visuals().widgets.hovered
+    } else {
+        ui.visuals().widgets.inactive
+    };
+    let stroke = if hovered { wv.bg_stroke } else { egui::Stroke::NONE };
+    (wv.weak_bg_fill, wv.fg_stroke.color, stroke)
+}
+
+/// Переключатель канала с крестиком удаления внутри.
+fn channel_chip(ui: &mut egui::Ui, name: &str, on: bool) -> Option<ChipAction> {
+    let hint = if on {
+        "Скрыть строки канала (ПКМ — показывать только его)"
+    } else {
+        "Показывать строки канала (ПКМ — показывать только его)"
+    };
+    let (resp, x_resp) = x_chip(ui, name, hint, &format!("Перестать слушать «{name}»"), |ui, hovered| {
+        let (fill, _, stroke) = plain_chip_colors(ui, hovered);
+        if on {
+            let sel = ui.visuals().selection;
+            (sel.bg_fill, sel.stroke.color, stroke)
+        } else {
+            (fill, ui.visuals().weak_text_color(), stroke)
+        }
+    });
+    let mut only = false;
+    resp.context_menu(|ui| {
+        if ui.button("Показывать только этот канал").clicked() {
+            only = true;
+        }
+    });
+    if x_resp.clicked() {
+        Some(ChipAction::Remove)
+    } else if only {
+        Some(ChipAction::Only)
+    } else if resp.clicked() {
+        Some(ChipAction::Toggle)
+    } else {
+        None
+    }
+}
+
+/// Отступ между колонкой подписей и полями; посередине проходит вертикальная черта.
+const LABEL_GAP: f32 = 16.0;
+
+/// Строка «подпись | содержимое»: подпись прижата влево в колонке ширины `label_w`,
+/// содержимое начинается сразу за чертой и переносится по ширине.
+fn label_row_inner<R>(
+    ui: &mut egui::Ui,
+    label_w: f32,
+    label: &str,
+    hint: &str,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    ui.horizontal_top(|ui| {
+        let h = ui.spacing().interact_size.y;
+        ui.allocate_ui_with_layout(
+            egui::vec2(label_w, h),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.set_min_size(egui::vec2(label_w, h));
+                ui.label(label).on_hover_text(hint);
+            },
+        );
+        ui.add_space(LABEL_GAP - ui.spacing().item_spacing.x);
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), h),
+            egui::Layout::left_to_right(egui::Align::Center).with_main_wrap(true),
+            add,
+        )
+        .inner
+    })
+    .inner
+}
+
+fn labeled_row(
+    ui: &mut egui::Ui,
+    label_w: f32,
+    label: &str,
+    hint: &str,
+    add: impl FnOnce(&mut egui::Ui) -> bool,
+) -> bool {
+    label_row_inner(ui, label_w, label, hint, add)
+}
+
+/// Enter в однострочном поле (оно при этом теряет фокус).
+fn enter_pressed(ui: &egui::Ui, r: &egui::Response) -> bool {
+    r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
+}
+
+/// Строка окна настроек: подпись слева, элемент управления у правого края.
+fn setting_row(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui)) {
+    ui.horizontal(|ui| {
+        ui.set_min_height(32.0);
+        ui.label(label);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), add);
+    });
+}
+
+/// Ряд кнопок-сегментов в общей рамке; выбранный сегмент подсвечен.
+fn segmented<T: Copy + PartialEq>(ui: &mut egui::Ui, value: &mut T, options: &[(T, RichText, &str)]) {
+    egui::Frame::new()
+        .fill(ui.visuals().extreme_bg_color)
+        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+        .corner_radius(6)
+        .inner_margin(3)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                // В раскладке справа налево (у правого края окна) идём с конца, чтобы порядок сохранился.
+                let rtl = ui.layout().main_dir() == egui::Direction::RightToLeft;
+                let ordered: Vec<_> = if rtl {
+                    options.iter().rev().collect()
+                } else {
+                    options.iter().collect()
+                };
+                for (v, icon, hint) in ordered {
+                    let r = ui
+                        .add(
+                            egui::Button::selectable(*value == *v, icon.clone().size(18.0))
+                                .min_size(egui::vec2(36.0, 24.0)),
+                        )
+                        .on_hover_text(*hint);
+                    if r.clicked() {
+                        *value = *v;
+                    }
+                }
+            });
+        });
+}
+
+/// Переключатель «вкл/выкл».
+fn toggle_switch(ui: &mut egui::Ui, on: &mut bool) -> egui::Response {
+    let size = ui.spacing().interact_size.y * egui::vec2(2.0, 1.0);
+    let (rect, mut resp) = ui.allocate_exact_size(size, egui::Sense::click());
+    if resp.clicked() {
+        *on = !*on;
+        resp.mark_changed();
+    }
+    resp.widget_info(|| {
+        egui::WidgetInfo::selected(egui::Role::Switch, ui.is_enabled(), *on, "")
+    });
+    if ui.is_rect_visible(rect) {
+        let t = ui.ctx().animate_bool_responsive(resp.id, *on);
+        let v = ui.style().interact_selectable(&resp, *on);
+        let radius = 0.5 * rect.height();
+        ui.painter()
+            .rect(rect, radius, v.bg_fill, v.bg_stroke, egui::StrokeKind::Inside);
+        let x = egui::lerp((rect.left() + radius)..=(rect.right() - radius), t);
+        ui.painter()
+            .circle(egui::pos2(x, rect.center().y), 0.75 * radius, v.bg_fill, v.fg_stroke);
+    }
+    resp.on_hover_text(if *on { "Вкл." } else { "Выкл." })
 }
 
 fn status_look(s: &ConnStatus) -> (Color32, String) {
@@ -1765,113 +2475,175 @@ fn status_look(s: &ConnStatus) -> (Color32, String) {
     }
 }
 
-/// Строка с «чипами» подстрок и полем для добавления новой. Возвращает true, если список изменился.
-fn filter_row(
-    ui: &mut egui::Ui,
-    label: &str,
-    hint: &str,
-    list: &mut Vec<String>,
-    input: &mut String,
-) -> bool {
+/// Поле для новой подстроки (добавляется по Enter) и чипы уже применённых.
+/// Возвращает true, если список изменился.
+fn filter_items(ui: &mut egui::Ui, list: &mut Vec<String>, input: &mut String) -> bool {
     let mut changed = false;
-    ui.horizontal_wrapped(|ui| {
-        ui.label(label).on_hover_text(hint);
-        let mut i = 0;
-        while i < list.len() {
-            if ui.button(format!("{} ✖", list[i])).on_hover_text("Убрать").clicked() {
-                list.remove(i);
-                changed = true;
-            } else {
-                i += 1;
-            }
-        }
-        let r = ui.add(
-            egui::TextEdit::singleline(input)
-                .hint_text("подстрока")
-                .desired_width(160.0),
-        );
-        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        if (ui.button("➕").on_hover_text("Добавить").clicked() || enter) && !input.is_empty() {
-            let f = std::mem::take(input);
-            if !list.contains(&f) {
-                list.push(f);
-                changed = true;
-            }
-        }
-        if !list.is_empty() && ui.button("Сбросить").clicked() {
-            list.clear();
+    let r = ui.add(
+        egui::TextEdit::singleline(input)
+            .hint_text("подстрока")
+            .desired_width(160.0),
+    );
+    if enter_pressed(ui, &r) && !input.is_empty() {
+        let f = std::mem::take(input);
+        if !list.contains(&f) {
+            list.push(f);
             changed = true;
         }
-    });
+        r.request_focus();
+    }
+    let mut i = 0;
+    while i < list.len() {
+        let (_, x) = x_chip(ui, &list[i], "", "Убрать", plain_chip_colors);
+        if x.clicked() {
+            list.remove(i);
+            changed = true;
+        } else {
+            i += 1;
+        }
+    }
+    if list.len() > 1 && ui.button("Сбросить").clicked() {
+        list.clear();
+        changed = true;
+    }
     changed
 }
 
-/// Строка поиска: поле, переходы ▲/▼ и счётчик. Ctrl+F ставит фокус в поле.
-fn search_row(ui: &mut egui::Ui, search: &mut Search) {
-    ui.horizontal(|ui| {
-        ui.label("Поиск:");
-        let id = egui::Id::unique("log_search");
-        let r = ui.add(
-            egui::TextEdit::singleline(&mut search.query)
-                .id(id)
-                .hint_text("Ctrl+F")
-                .return_key(None)
-                .desired_width(220.0),
+/// Поле поиска, переходы ▲/▼, счётчик и закреплённые запросы. Ctrl+F ставит фокус в поле.
+/// Enter закрепляет запрос из поля (у каждого свой цвет), в пустом поле — следующее совпадение.
+fn search_items(
+    ui: &mut egui::Ui,
+    search: &mut Search,
+    pal: LogPalette,
+    rows: &[Row],
+    visible: &[usize],
+) -> bool {
+    let id = egui::Id::unique("log_search");
+    let r = ui.add(
+        egui::TextEdit::singleline(&mut search.query)
+            .id(id)
+            .hint_text("Ctrl+F")
+            .return_key(None)
+            .desired_width(200.0),
+    );
+    if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::F)) {
+        r.request_focus();
+    }
+    // Цвет, которым подсвечивается текст из поля, — полоска под полем.
+    if !search.query.is_empty() {
+        let rect = r.rect;
+        ui.painter().hline(
+            rect.x_range().shrink(3.0),
+            rect.bottom() - 1.5,
+            egui::Stroke::new(3.0, pal.term_bg(search.terms.len())),
         );
-        if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::F)) {
-            r.request_focus();
-        }
-        if r.has_focus() {
-            // Enter — следующее (ниже), Shift+Enter — предыдущее; фокус остаётся в поле.
-            if ui.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::Enter)) {
-                search.step(false);
-            } else if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+    }
+    if r.has_focus() {
+        if ui.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::Enter)) {
+            search.step(false);
+        } else if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+            let q = search.query.trim().to_string();
+            if q.is_empty() {
                 search.step(true);
+            } else {
+                search.query.clear();
+                if !search.terms.iter().any(|t| t.to_lowercase() == q.to_lowercase()) {
+                    search.terms.push(q);
+                }
             }
         }
-        // Esc снимает фокус с поля, поэтому проверяем и только что потерянный фокус.
-        if (r.has_focus() || r.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+    }
+    // Esc очищает поле, а в пустом поле — снимает все закреплённые запросы.
+    // Esc снимает фокус с поля, поэтому проверяем и только что потерянный фокус.
+    if (r.has_focus() || r.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if search.query.is_empty() {
+            search.terms.clear();
+        } else {
             search.query.clear();
         }
-        let any = !search.matches.is_empty();
-        if ui.add_enabled(any, egui::Button::new("⏶")).on_hover_text("Предыдущее (Shift+Enter)").clicked() {
-            search.step(false);
-        }
-        if ui.add_enabled(any, egui::Button::new("⏷")).on_hover_text("Следующее (Enter)").clicked() {
-            search.step(true);
-        }
-        if !search.query.is_empty() {
-            let text = match search.current {
-                Some(c) if any => format!("{} из {}", c + 1, search.matches.len()),
-                _ => "нет совпадений".to_string(),
+    }
+    let any = !search.matches.is_empty();
+    if ui
+        .add_enabled(any, egui::Button::new("⏶"))
+        .on_hover_text("Предыдущее (Shift+Enter)")
+        .clicked()
+    {
+        search.step(false);
+    }
+    if ui
+        .add_enabled(any, egui::Button::new("⏷"))
+        .on_hover_text("Следующее (Enter в пустом поле)")
+        .clicked()
+    {
+        search.step(true);
+    }
+    if !search.query.is_empty() || !search.terms.is_empty() {
+        let text = match search.current {
+            Some(c) if any => format!("{} из {}", c + 1, search.matches.len()),
+            _ => "нет совпадений".to_string(),
+        };
+        ui.label(RichText::new(text).color(GRAY));
+    }
+    let mut i = 0;
+    while i < search.terms.len() {
+        let bg = pal.term_bg(i);
+        let icons = [
+            ("⏶", "Предыдущее вхождение этого запроса"),
+            ("⏷", "Следующее вхождение этого запроса"),
+            ("✖", "Убрать запрос"),
+        ];
+        let (_, z) = icon_chip(ui, &search.terms[i], "", &icons, |ui, hovered| {
+            let stroke = if hovered {
+                ui.visuals().widgets.hovered.bg_stroke
+            } else {
+                egui::Stroke::NONE
             };
-            ui.label(RichText::new(text).color(GRAY));
-            if ui.small_button("✖").on_hover_text("Очистить поиск (Esc)").clicked() {
-                search.query.clear();
-            }
+            (bg, Color32::BLACK, stroke)
+        });
+        if z[0].clicked() {
+            search.step_term(rows, visible, i, false);
         }
-    });
+        if z[1].clicked() {
+            search.step_term(rows, visible, i, true);
+        }
+        if z[2].clicked() {
+            search.terms.remove(i);
+        } else {
+            i += 1;
+        }
+    }
+    if search.terms.len() > 1
+        && ui
+            .button("Сбросить")
+            .on_hover_text("Убрать все запросы (Esc в пустом поле)")
+            .clicked()
+    {
+        search.terms.clear();
+    }
+    false
 }
 
-/// Добавляет текст, подсвечивая вхождения поискового запроса `query` и выделенного
-/// текста `marked` (оба в нижнем регистре). Подсветка поиска перекрывает выделение.
+/// Добавляет текст, подсвечивая вхождения поисковых запросов `patterns` (каждый своим цветом)
+/// и выделенного текста `marked` (всё в нижнем регистре). Поиск перекрывает выделение.
 fn append_highlighted(
     job: &mut LayoutJob,
     text: &str,
-    query: &str,
+    patterns: &[String],
     marked: &str,
     fmt: TextFormat,
-    current: bool,
+    pal: LogPalette,
 ) {
     let lower = text.to_lowercase();
     // Подсветка возможна, только если нижний регистр не меняет длину строки в байтах.
-    if (query.is_empty() && marked.is_empty()) || lower.len() != text.len() {
+    if (patterns.is_empty() && marked.is_empty()) || lower.len() != text.len() {
         job.append(text, 0.0, fmt);
         return;
     }
-    // Стиль каждого байта: 0 — обычный, 1 — выделенный текст, 2 — совпадение поиска.
+    // Стиль каждого байта: 0 — обычный, 1 — выделенный текст, 2 + k — совпадение запроса k.
     let mut style = vec![0u8; text.len()];
-    for (pattern, level) in [(marked, 1u8), (query, 2u8)] {
+    let all = std::iter::once((marked, 1u8))
+        .chain(patterns.iter().enumerate().map(|(k, p)| (p.as_str(), (k + 2).min(255) as u8)));
+    for (pattern, level) in all {
         if pattern.is_empty() {
             continue;
         }
@@ -1882,15 +2654,6 @@ fn append_highlighted(
             }
         }
     }
-    let mut mark = fmt.clone();
-    mark.background = Color32::from_rgb(140, 200, 255);
-    mark.color = Color32::BLACK;
-    let mut hl = mark.clone();
-    hl.background = if current {
-        Color32::from_rgb(255, 150, 30)
-    } else {
-        Color32::from_rgb(255, 225, 90)
-    };
     let mut pos = 0;
     while pos < text.len() {
         let level = style[pos];
@@ -1898,11 +2661,15 @@ fn append_highlighted(
             .iter()
             .position(|&l| l != level)
             .map_or(text.len(), |n| pos + n);
-        let f = match level {
-            0 => fmt.clone(),
-            1 => mark.clone(),
-            _ => hl.clone(),
-        };
+        let mut f = fmt.clone();
+        if level > 0 {
+            f.color = Color32::BLACK;
+            f.background = if level == 1 {
+                pal.mark_bg()
+            } else {
+                pal.term_bg(level as usize - 2)
+            };
+        }
         job.append(&text[pos..end], 0.0, f);
         pos = end;
     }
@@ -1915,11 +2682,9 @@ fn row_job(
     row: &Row,
     all_tab: bool,
     ch_width: usize,
-    dark: bool,
-    text_color: Color32,
-    query: &str,
+    pal: LogPalette,
+    patterns: &[String],
     marked: &str,
-    is_current: bool,
     wrap_width: f32,
 ) -> LayoutJob {
     let font = FontId::monospace(13.0);
@@ -1929,23 +2694,23 @@ fn row_job(
     job.append(
         &row.entry.time.format("%d.%m %H:%M:%S%.3f  ").to_string(),
         0.0,
-        fmt(GRAY),
+        fmt(pal.time()),
     );
     if all_tab {
         let ch: &str = &row.entry.channel;
         let (name, c) = if ch.is_empty() {
-            ("*", ORANGE)
+            ("*", pal.special())
         } else {
-            (ch, channel_color(ch, dark))
+            (ch, pal.channel(ch))
         };
         job.append(&format!("{name:<ch_width$}  "), 0.0, fmt(c));
     }
     let c = if row.entry.channel.is_empty() {
-        ORANGE
+        pal.special()
     } else {
-        text_color
+        pal.text
     };
-    append_highlighted(&mut job, &row.line, query, marked, fmt(c), is_current);
+    append_highlighted(&mut job, &row.line, patterns, marked, fmt(c), pal);
     job
 }
 
@@ -1956,6 +2721,7 @@ fn ensure_heights(
     rows: &[Row],
     ui: &egui::Ui,
     key: HeightsKey,
+    pal: LogPalette,
 ) {
     if *heights_key != Some(key) {
         heights.clear();
@@ -1964,8 +2730,6 @@ fn ensure_heights(
     if heights.len() >= rows.len() {
         return;
     }
-    let dark = ui.visuals().dark_mode;
-    let text_color = ui.visuals().text_color();
     let width = f32::from_bits(key.width_bits);
     heights.reserve(rows.len() - heights.len());
     let mut i = heights.len();
@@ -1974,11 +2738,9 @@ fn ensure_heights(
             &rows[i],
             key.all_tab,
             key.ch_width,
-            dark,
-            text_color,
+            pal,
+            &[],
             "",
-            "",
-            false,
             width,
         );
         heights.push(ui.fonts_mut(|fonts| fonts.layout_job(job)).size().y);
@@ -1991,13 +2753,6 @@ fn status_dot(ui: &mut egui::Ui, color: Color32) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::hover());
     ui.painter().circle_filled(rect.center(), 4.5, color);
     resp
-}
-
-fn channel_color(ch: &str, dark: bool) -> Color32 {
-    let h = ch.bytes().fold(5381u32, |h, b| h.wrapping_mul(33) ^ b as u32);
-    let hue = (h % 360) as f32 / 360.0;
-    let (s, v) = if dark { (0.55, 0.95) } else { (0.75, 0.6) };
-    egui::ecolor::Hsva::new(hue, s, v, 1.0).into()
 }
 
 fn format_entry(e: &LogEntry) -> String {
@@ -2047,6 +2802,92 @@ mod tests {
     }
 
     #[test]
+    fn step_term_walks_only_its_term() {
+        let mut v = View::default();
+        for (k, t) in ["a x", "b", "a", "x", "a b"].iter().enumerate() {
+            v.push(entry(k as i64, "ch", t));
+        }
+        let empty: Vec<String> = Vec::new();
+        v.visible(&empty, &empty, true);
+        let key = (v.channels_version, v.generation, v.filter_version);
+        v.search.terms = vec!["a".into(), "b".into()];
+        v.search.update(&v.rows, &v.cache, key);
+        // Совпадения: строки 0, 1, 2, 4; текущее — последнее (строка 4).
+        assert_eq!(v.search.matches, vec![0, 1, 2, 4]);
+        let pos = |v: &View| v.search.current.map(|c| v.search.matches[c]);
+        v.search.step_term(&v.rows, &v.cache, 0, false);
+        assert_eq!(pos(&v), Some(2));
+        v.search.step_term(&v.rows, &v.cache, 0, false);
+        assert_eq!(pos(&v), Some(0));
+        v.search.step_term(&v.rows, &v.cache, 0, false);
+        assert_eq!(pos(&v), Some(4), "по кругу к последнему");
+        v.search.step_term(&v.rows, &v.cache, 1, true);
+        assert_eq!(pos(&v), Some(1), "после последнего — к первому вхождению «b»");
+    }
+
+    #[test]
+    fn hidden_channels_filter_rows() {
+        let mut v = View::default();
+        v.push(entry(0, "a", "one"));
+        v.push(entry(1, "b", "two"));
+        v.push(entry(2, "", "service"));
+        let empty: Vec<String> = Vec::new();
+        assert_eq!(v.visible(&empty, &empty, true).len(), 3);
+        v.set_hidden("a", true);
+        assert_eq!(v.visible(&empty, &empty, true), &[1, 2]);
+        let channels = vec!["a".to_string(), "b".to_string()];
+        v.show_only(&channels, "a");
+        assert_eq!(v.visible(&empty, &empty, true), &[0, 2]);
+        v.retain_hidden(&["a".to_string()]);
+        assert_eq!(v.visible(&empty, &empty, true).len(), 3);
+        v.set_hidden("b", true);
+        v.show_all_channels();
+        assert_eq!(v.visible(&empty, &empty, true).len(), 3);
+    }
+
+    /// Щелчок по чипу в точке `at` (доля ширины чипа); возвращает действие.
+    fn click_chip(at: f32) -> Option<&'static str> {
+        let ctx = egui::Context::default();
+        let mut rect = egui::Rect::NOTHING;
+        let frame = |events: Vec<egui::Event>, rect: &mut egui::Rect| {
+            let mut result = None;
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                events,
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| {
+                let before = ui.cursor().min;
+                result = channel_chip(ui, "channel", true).map(|a| match a {
+                    ChipAction::Toggle => "toggle",
+                    ChipAction::Only => "only",
+                    ChipAction::Remove => "remove",
+                });
+                *rect = egui::Rect::from_min_max(before, ui.min_rect().max);
+            });
+            out.textures_delta.clear();
+            result
+        };
+        frame(Vec::new(), &mut rect);
+        let pos = egui::pos2(rect.left() + rect.width() * at, rect.center().y);
+        let button = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(vec![egui::Event::PointerMoved(pos)], &mut rect);
+        frame(vec![button(true)], &mut rect);
+        frame(vec![button(false)], &mut rect)
+    }
+
+    #[test]
+    fn channel_chip_click_zones() {
+        assert_eq!(click_chip(0.2), Some("toggle"));
+        assert_eq!(click_chip(0.95), Some("remove"));
+    }
+
+    #[test]
     fn row_keeps_newlines() {
         let r = Row::new(entry(0, "", "a\r\nb\nc"));
         assert_eq!(r.line, "a\nb\nc");
@@ -2085,7 +2926,7 @@ mod tests {
         let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
             let width = 160.0;
             let layout = |r: &Row| {
-                let job = row_job(r, false, 6, true, Color32::WHITE, "", "", false, width);
+                let job = row_job(r, false, 6, LogPalette::new(&egui::Visuals::dark(), false), &[], "", width);
                 ui.fonts_mut(|f| f.layout_job(job)).size().y
             };
             long_h = layout(&long);
@@ -2122,8 +2963,8 @@ mod tests {
             v.push(entry(i, "ch", text));
         }
         let empty: Vec<String> = Vec::new();
-        v.visible(&empty, &empty);
-        let key = (v.tab.clone(), v.generation, v.filter_version);
+        v.visible(&empty, &empty, true);
+        let key = (v.channels_version, v.generation, v.filter_version);
         v.search.query = "match".to_string();
         v.search.update(&v.rows, &v.cache, key);
         assert!(v.search.matches.len() > 1);
@@ -2132,7 +2973,7 @@ mod tests {
             let text = if i == 1 { "match" } else { "noise" };
             v.push(entry(MAX_ROWS as i64 + i, "ch", text));
         }
-        v.visible(&empty, &empty);
+        v.visible(&empty, &empty, true);
         assert_eq!(v.rows.len(), MAX_ROWS);
         for &i in &v.cache {
             assert!(i < v.rows.len(), "кэш ссылается на вытесненную строку");

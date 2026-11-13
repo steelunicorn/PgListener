@@ -75,12 +75,14 @@ impl Worker {
         self.events.send(Event::Status(self.cfg.id, self.session, s));
     }
 
+    /// Служебное сообщение: только в окно, в файлы логов не пишется.
     fn system(&mut self, text: impl Into<String>) {
-        self.entry(LogEntry {
+        let e = LogEntry {
             time: Local::now().naive_local(),
             channel: Arc::from(""),
             text: text.into(),
-        });
+        };
+        self.events.send(Event::Entry(self.cfg.id, e));
     }
 
     fn entry(&mut self, e: LogEntry) {
@@ -118,7 +120,6 @@ impl Worker {
     }
 
     async fn run(mut self, mut cmds: UnboundedReceiver<Cmd>) {
-        self.send_history("");
         for ch in self.channels.clone() {
             self.send_history(&ch);
         }
