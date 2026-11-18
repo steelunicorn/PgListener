@@ -285,7 +285,6 @@ impl Row {
     }
 }
 
-#[derive(Default)]
 struct View {
     rows: Vec<Row>,
     /// Растёт, когда строки меняются не только добавлением в конец.
@@ -309,6 +308,42 @@ struct View {
     /// Высоты строк с переносами при текущих ширине и раскладке.
     heights: Vec<f32>,
     heights_key: Option<HeightsKey>,
+    /// Переход к найденной строке отключил прилипание к концу; действие пользователя его снимает.
+    paused: bool,
+    /// Достигнут ли низ лога в прошлом кадре.
+    at_bottom: bool,
+    /// Смещение прокрутки в прошлом кадре — чтобы отличить прокрутку пользователя от нашей.
+    last_offset: f32,
+    /// Полная высота содержимого в прошлом кадре.
+    content_h: f32,
+}
+
+impl Default for View {
+    fn default() -> Self {
+        Self {
+            rows: Vec::new(),
+            generation: 0,
+            filter_version: 0,
+            hidden: HashSet::new(),
+            hide_system: false,
+            channels_version: 0,
+            filter_input: String::new(),
+            include_input: String::new(),
+            channel_input: String::new(),
+            cache_key: (0, 0, 0),
+            cache_seen: 0,
+            cache: Vec::new(),
+            search: Search::default(),
+            drawn: 0,
+            heights: Vec::new(),
+            heights_key: None,
+            paused: false,
+            // Каждое окно подключения начинает со слежения за концом.
+            at_bottom: true,
+            last_offset: 0.0,
+            content_h: 0.0,
+        }
+    }
 }
 
 /// Поиск по показанным строкам. Запросов может быть несколько, у каждого свой цвет.
@@ -1337,6 +1372,10 @@ impl App {
                 v.generation += 1;
                 v.heights.clear();
                 v.heights_key = None;
+                // После очистки окно снова следит за концом.
+                v.paused = false;
+                v.at_bottom = true;
+                v.last_offset = 0.0;
             }
         });
     }
@@ -1447,6 +1486,10 @@ impl App {
             drawn,
             heights,
             heights_key,
+            paused,
+            at_bottom,
+            last_offset,
+            content_h,
             ..
         } = view;
         // Прилипание к концу лога срабатывает по размеру прошлого кадра, поэтому после
@@ -1497,17 +1540,43 @@ impl App {
                 visible.len()
             )
         };
-        ui.label(RichText::new(counter).small().color(GRAY));
+        // Слежение за концом: галочка показывает состояние, а не только позицию у низа.
+        let mut jump_to_end = false;
+        ui.horizontal(|ui| {
+            // Строка чуть выше обычной, чтобы чип был заметен.
+            ui.set_min_height(26.0);
+            ui.label(RichText::new(counter).small().color(GRAY));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let following = follows(*paused, *at_bottom);
+                if tail_chip(ui, following) && !following {
+                    jump_to_end = true;
+                }
+            });
+        });
+        if jump_to_end {
+            // Щелчок по чипу — действие пользователя, пауза поиска снимается.
+            *paused = false;
+        }
 
         let mut copy: Option<String> = None;
         let patterns = search.patterns();
         let current_pos = search.current.map(|c| search.matches[c]);
         let jump = search.scroll_to.take();
-        // На кадре перехода к совпадению отключаем прилипание к концу, иначе оно перебьёт прокрутку.
-        egui::ScrollArea::vertical()
+        let paused_before = *paused;
+        let at_bottom_before = *at_bottom;
+        let jump_valid = jump.is_some_and(|pos| pos < visible.len());
+        if jump_valid {
+            // Переход к найденной строке не должен оставлять слежение включённым.
+            *paused = true;
+        }
+        // Прилипание к концу выключено на время паузы поиска и на кадре прыжка в конец.
+        let stick = !*paused && !jump_to_end;
+        let mut at_bottom_now = *at_bottom;
+        let mut content_h_now = *content_h;
+        let area = egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
-            .stick_to_bottom(jump.is_none())
+            .stick_to_bottom(stick)
             .show_viewport(ui, |ui, viewport| {
                 // Ширина берётся до отрисовки: полоса прокрутки всегда занимает место,
                 // поэтому перенос не «дёргается» при появлении/исчезновении строк.
@@ -1528,6 +1597,13 @@ impl App {
 
                 let left = ui.max_rect().left();
                 let top = ui.max_rect().top();
+                let last_h = if count > 0 {
+                    heights[visible[count - 1]]
+                } else {
+                    0.0
+                };
+                at_bottom_now = reaches_end(viewport.min.y, viewport.height(), total_h, last_h);
+                content_h_now = total_h;
 
                 // Первая и последняя строки, попавшие в видимую область.
                 let mut first = 0;
@@ -1550,7 +1626,19 @@ impl App {
                     last += 1;
                 }
 
-                if let Some(pos) = jump {
+                if jump_to_end {
+                    // Прыжок в самый конец — мгновенно, без анимации.
+                    let y_last = (total_h - last_h - spacing).max(0.0);
+                    ui.scroll_to_rect_animation(
+                        egui::Rect::from_min_size(
+                            egui::pos2(left, top + y_last),
+                            egui::vec2(width, last_h.max(1.0)),
+                        ),
+                        Some(egui::Align::BOTTOM),
+                        egui::style::ScrollAnimation::none(),
+                    );
+                    at_bottom_now = true;
+                } else if let Some(pos) = jump {
                     if pos < count {
                         let mut y = 0.0f32;
                         for &i in &visible[..pos] {
@@ -1558,12 +1646,13 @@ impl App {
                         }
                         let h = heights[visible[pos]];
                         // Прямоугольник — в экранных координатах содержимого.
-                        ui.scroll_to_rect(
+                        ui.scroll_to_rect_animation(
                             egui::Rect::from_min_size(
                                 egui::pos2(left, top + y),
                                 egui::vec2(width, h),
                             ),
                             Some(egui::Align::Center),
+                            egui::style::ScrollAnimation::none(),
                         );
                     }
                 }
@@ -1613,6 +1702,24 @@ impl App {
                     );
                 }
             });
+
+        // При паузе поиска своих прокруток нет: смещение мог изменить только пользователь.
+        // Обрезка по лимиту и смена фильтров меняют высоту содержимого — это не прокрутка.
+        let offset_now = area.state.clamped_offset().y;
+        let content_changed = (content_h_now - *content_h).abs() > 0.5;
+        if !jump_to_end
+            && !jump_valid
+            && scroll_clears_pause(*paused, content_changed, offset_now - *last_offset)
+        {
+            *paused = false;
+        }
+        *last_offset = offset_now;
+        *content_h = content_h_now;
+        *at_bottom = at_bottom_now;
+        if paused_before != *paused || at_bottom_before != *at_bottom {
+            // Вид чипа изменился — перерисовать сразу, не дожидаясь движения мыши.
+            ui.ctx().request_repaint();
+        }
         if let Some(text) = copy {
             ui.ctx().copy_text(text);
         }
@@ -2816,6 +2923,111 @@ fn ensure_heights(
     }
 }
 
+/// Слежение за концом лога включено, если нет паузы поиска и окно стоит у низа.
+fn follows(paused: bool, at_bottom: bool) -> bool {
+    !paused && at_bottom
+}
+
+/// Достигнут ли низ лога. Достаточно, чтобы последняя строка была видна хотя бы частично:
+/// полностью совпадать с концом прокрутки не требуется.
+fn reaches_end(offset: f32, viewport_h: f32, total_h: f32, last_row_h: f32) -> bool {
+    if total_h <= viewport_h + 0.5 {
+        // Всё содержимое влезает в окно — низ виден всегда.
+        return true;
+    }
+    offset + viewport_h + last_row_h >= total_h - 0.5
+}
+
+/// Прокрутка пользователя во время паузы поиска снимает паузу. Изменение высоты
+/// содержимого (обрезка по лимиту, смена фильтров) прокруткой не считается.
+fn scroll_clears_pause(paused: bool, content_changed: bool, offset_delta: f32) -> bool {
+    paused && !content_changed && offset_delta.abs() > 0.5
+}
+
+/// Чип слежения «tail -f»: живая галочка показывает, включено ли слежение.
+fn tail_chip(ui: &mut egui::Ui, following: bool) -> bool {
+    // Галочку рисуем сами: символ «✓» есть не во всех комплектах шрифтов и выходил квадратиком.
+    let visuals = ui.visuals().clone();
+    let font = egui::FontId::proportional(11.5);
+    let text_color = if following {
+        visuals.strong_text_color()
+    } else {
+        visuals.text_color()
+    };
+    let galley = ui.painter().layout_no_wrap("tail -f".to_owned(), font, text_color);
+    let box_side = 12.0;
+    let padding = egui::vec2(7.0, 3.0);
+    let gap = 5.0;
+    let size = egui::vec2(
+        galley.size().x + padding.x * 2.0 + box_side + gap,
+        (galley.size().y + padding.y * 2.0).max(box_side + padding.y * 2.0),
+    );
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let bg = if following {
+        visuals.selection.bg_fill
+    } else {
+        visuals.faint_bg_color
+    };
+    let border = if response.hovered() {
+        visuals.selection.stroke
+    } else {
+        visuals.widgets.inactive.bg_stroke
+    };
+    let painter = ui.painter();
+    painter.rect_filled(rect, 4.0, bg);
+    painter.rect_stroke(rect, 4.0, border, egui::StrokeKind::Inside);
+    // Квадратик галочки слева.
+    let check_rect = egui::Rect::from_min_size(
+        egui::pos2(rect.left() + padding.x, rect.center().y - box_side / 2.0),
+        egui::vec2(box_side, box_side),
+    );
+    let mark = if following {
+        visuals.selection.stroke.color
+    } else {
+        visuals.weak_text_color()
+    };
+    painter.rect_stroke(
+        check_rect,
+        2.0,
+        egui::Stroke::new(1.0, mark),
+        egui::StrokeKind::Inside,
+    );
+    if following {
+        let c = check_rect.center();
+        let stroke = egui::Stroke::new(1.8, mark);
+        painter.line_segment(
+            [
+                egui::pos2(check_rect.left() + 2.5, c.y - 1.0),
+                egui::pos2(c.x - 0.5, check_rect.bottom() - 3.0),
+            ],
+            stroke,
+        );
+        painter.line_segment(
+            [
+                egui::pos2(c.x - 0.5, check_rect.bottom() - 3.0),
+                egui::pos2(check_rect.right() - 2.0, check_rect.top() + 3.0),
+            ],
+            stroke,
+        );
+    }
+    painter.galley(
+        egui::pos2(
+            check_rect.right() + gap,
+            rect.center().y - galley.size().y / 2.0,
+        ),
+        galley,
+        text_color,
+    );
+    response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(if following {
+            "Слежение включено: окно держится в конце. Щёлкните, чтобы остаться здесь"
+        } else {
+            "Перейти в конец лога и следить за новыми строками"
+        })
+        .clicked()
+}
+
 fn status_dot(ui: &mut egui::Ui, color: Color32) -> egui::Response {
     let size = egui::vec2(10.0, ui.spacing().interact_size.y);
     let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::hover());
@@ -3056,6 +3268,38 @@ mod tests {
             let pos = v.search.matches[c];
             assert!(v.rows[v.cache[pos]].entry.text.contains("match"));
         }
+    }
+
+    #[test]
+    fn at_bottom_accepts_partially_visible_last_row() {
+        // Содержимое 200 px, окно 100 px, последняя строка 20 px.
+        assert!(reaches_end(80.0, 100.0, 200.0, 20.0), "часть последней строки видна");
+        assert!(!reaches_end(60.0, 100.0, 200.0, 20.0), "до низа ещё далеко");
+        assert!(reaches_end(100.0, 100.0, 200.0, 20.0), "прокручено до конца");
+        assert!(reaches_end(0.0, 100.0, 100.0, 20.0), "всё влезает");
+        assert!(reaches_end(0.0, 100.0, 0.0, 0.0), "пустое окно");
+    }
+
+    #[test]
+    fn search_pause_wins_over_bottom() {
+        // Пауза поиска держит слежение выключенным, даже если окно у самого конца
+        // (совпадение оказалось внизу) — иначе галочка загорится сразу после прыжка.
+        assert!(!follows(true, true));
+        assert!(follows(false, true));
+        assert!(!follows(false, false));
+        assert!(!follows(true, false));
+    }
+
+    #[test]
+    fn user_scroll_clears_search_pause() {
+        // Прокрутка пользователя снимает паузу, даже если окно осталось у низа.
+        assert!(scroll_clears_pause(true, false, 5.0));
+        // Обрезка по лимиту и смена фильтров меняют высоту содержимого — это не прокрутка.
+        assert!(!scroll_clears_pause(true, true, 5.0));
+        // Без паузы снимать нечего.
+        assert!(!scroll_clears_pause(false, false, 5.0));
+        // Дрожание в пределах пикселя прокруткой не считаем.
+        assert!(!scroll_clears_pause(true, false, 0.1));
     }
 }
 
