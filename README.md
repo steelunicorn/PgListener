@@ -1,5 +1,7 @@
 # PgListener
 
+**Русский** · [English](README.en.md)
+
 [![Лицензия](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#лицензия)
 [![Релиз](https://img.shields.io/github/v/release/steelunicorn/PgListener?label=release)](https://github.com/steelunicorn/PgListener/releases/latest)
 [![Платформа](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](#сборка-под-windows)
