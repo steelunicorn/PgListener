@@ -53,7 +53,7 @@ There are no ready-made builds for Linux/macOS, but the project builds from sour
 - A bridge for the local network: PgListener accepts connections from other computers and forwards them to the database (see “Bridge”).
 - On connection loss the application reconnects by itself with delays of 1, 2, 5, 10, 20 and 30 s. Once every 30 s the connection is checked with a `SELECT 1` query.
 - Minimizing to the tray (Windows): a minimized window hides in the notification area. The window comes back with a click on the icon, and the icon menu can be used to exit. Enabled in the settings (⚙ button) with the “Minimize to tray” checkbox.
-- Appearance: “system”, light, dark and “Matrix” themes (muted green). The ⚙ button in the header opens the settings: the RU|EN language switch and the theme selector in the top row, “Minimize to tray”, “Service messages” and the renderer name line; with software rendering a warning is displayed there as well.
+- Appearance: “system”, light, dark and “Matrix” themes (muted green). The app icon in the title bar and in the tray follows the theme: the elephant with headphones on a light background, on dark blue and in the green glow of “Matrix”; with the “system” theme the picture matches the current Windows theme. The ⚙ button in the header opens the settings: the RU|EN language switch and the theme selector in the top row, “Minimize to tray”, “Service messages” and the renderer name line; with software rendering a warning is displayed there as well.
 - Interface language: Russian or English, the RU|EN switch in the settings next to the theme selector. On the first run the language comes from the Windows locale (Russian locale — Russian, otherwise English) and is remembered in `pglistener.db`. Until a language has been chosen, it can be set with the `PGLISTENER_LANG=ru` or `PGLISTENER_LANG=en` environment variable. Already received messages are not retranslated, neither are connection, folder and channel names.
 - On startup the application asks whether to restore the connections that were active when it was closed.
 - Connection passwords can be encrypted with a master password (see “Security”).
@@ -169,6 +169,8 @@ The active renderer is shown in the settings (⚙ button, the renderer name line
 | `src/main.rs` | startup, renderer selection |
 | `src/app.rs` | UI: connection tree, log, filters, search, themes, dialogs |
 | `src/i18n.rs` | UI strings in Russian and English, language selection |
+| `src/icons.rs` | theme icons: `.ico` for the window, 256 px PNG for the first frame and 32 px PNG for the tray |
+| `src/winicon.rs` | window icon from the theme `.ico` via Win32 (`WM_SETICON`) |
 | `src/worker.rs` | SSH tunnel, PostgreSQL connection, LISTEN/UNLISTEN, reconnecting |
 | `src/bridge.rs` | bridge: accepting network connections and forwarding them to the database |
 | `src/logfile.rs` | writing logs with daily rotation, reading the current day's lines |
@@ -177,6 +179,7 @@ The active renderer is shown in the settings (⚙ button, the renderer name line
 | `src/storage.rs` | storing folders and connections in SQLite |
 | `src/model.rs` | shared types |
 | `sql/log_notify.sql` | logging function for PostgreSQL |
+| `icons/` | theme icons: window `.ico` (several sizes), 256 px PNG for the window and 32 px for the tray; `dark.ico` is embedded into the exe |
 | `build.ps1`, `build.cmd` | release build, installing the exe above the sources and cleaning `target` |
 | `LICENSE-MIT`, `LICENSE-APACHE` | license terms (dual license, see “License”) |
 

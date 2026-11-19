@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::sync::{mpsc, Arc, Mutex};
 use tokio::sync::mpsc::UnboundedSender;
 use crate::i18n::{self, Key, Lang, t, tf};
+use crate::icons;
 
 const GREEN: Color32 = Color32::from_rgb(60, 180, 75);
 const ORANGE: Color32 = Color32::from_rgb(230, 150, 30);
@@ -124,6 +125,22 @@ impl UiTheme {
             UiTheme::Light => egui::ThemePreference::Light,
             UiTheme::Dark | UiTheme::Hacker => egui::ThemePreference::Dark,
         });
+    }
+}
+
+/// Рисунок иконки для темы. У «как в системе» он следует фактической светлоте окна.
+fn theme_art(theme: UiTheme, dark: bool) -> (&'static icons::Art, u8) {
+    match theme {
+        UiTheme::Light => (&icons::LIGHT, 1),
+        UiTheme::Dark => (&icons::DARK, 2),
+        UiTheme::Hacker => (&icons::MATRIX, 3),
+        UiTheme::System => {
+            if dark {
+                (&icons::DARK, 2)
+            } else {
+                (&icons::LIGHT, 1)
+            }
+        }
     }
 }
 
@@ -700,6 +717,8 @@ pub struct App {
     theme: UiTheme,
     /// Язык интерфейса и служебных сообщений воркера и моста.
     lang: Lang,
+    /// Какая иконка сейчас стоит: 1 — светлая, 2 — тёмная, 3 — «Матрица», 0 — ещё не выбрана.
+    theme_icon: u8,
     /// Показывать служебные сообщения приложения в логе.
     show_system: bool,
     /// Чем рисуется окно: рендерер и видеокарта; `software` — без видеокарты.
@@ -802,6 +821,7 @@ impl App {
             tray: Tray::new(&cc.egui_ctx),
             minimize_to_tray: true,
             theme: UiTheme::System,
+            theme_icon: 0,
             lang,
             show_system: true,
             render: RenderInfo::detect(cc),
@@ -861,7 +881,31 @@ impl App {
         self.report(r);
         // Меню трея собирается один раз, поэтому пересоздаём его с новыми подписями.
         self.tray = Tray::new(ctx);
+        // Новый трей получает иконку по умолчанию — следующий кадр вернёт ту, что положена теме.
+        self.theme_icon = 0;
         ctx.request_repaint();
+    }
+
+    /// Держит иконку окна и трея в соответствии с темой оформления.
+    fn sync_theme_icon(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
+        let (art, id) = theme_art(self.theme, ctx.theme() == egui::Theme::Dark);
+        if self.theme_icon == id {
+            return;
+        }
+        if let Some(window) = frame.winit_window() {
+            use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            if let Ok(handle) = window.window_handle() {
+                if let RawWindowHandle::Win32(w) = handle.as_raw() {
+                    crate::winicon::set(w.hwnd.get(), art.ico);
+                }
+            }
+        }
+        if let Some(tray) = &self.tray {
+            if let Some(rgba) = icons::rgba(art.tray, icons::TRAY_SIZE) {
+                tray.set_icon(rgba, icons::TRAY_SIZE);
+            }
+        }
+        self.theme_icon = id;
     }
 
     fn conn(&self, id: i64) -> Option<&ConnConfig> {
@@ -1272,6 +1316,7 @@ impl App {
         if theme != self.theme {
             self.theme = theme;
             theme.apply(ui.ctx());
+            // Иконку окна и трея обновит следующий кадр (`sync_theme_icon`).
             let r = self.storage.set_setting("theme", theme.key());
             self.report(r);
         }
@@ -2310,7 +2355,9 @@ impl App {
 }
 
 impl eframe::App for App {
-    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        // Иконка окна и трея следует за темой, в том числе за системной.
+        self.sync_theme_icon(ctx, frame);
         self.handle_events();
         while let Some(cmd) = self.tray.as_ref().and_then(Tray::poll) {
             match cmd {
@@ -3286,6 +3333,17 @@ mod tests {
             });
         });
         out.textures_delta.clear();
+    }
+
+    #[test]
+    fn theme_art_follows_theme() {
+        assert_eq!(theme_art(UiTheme::Light, true).1, 1);
+        assert_eq!(theme_art(UiTheme::Dark, false).1, 2);
+        assert_eq!(theme_art(UiTheme::Hacker, false).1, 3);
+        assert_eq!(theme_art(UiTheme::Hacker, true).0.tray, icons::MATRIX.tray);
+        // «Как в системе» берёт рисунок под фактическую светлоте окна.
+        assert_eq!(theme_art(UiTheme::System, true).1, 2);
+        assert_eq!(theme_art(UiTheme::System, false).1, 1);
     }
 
     #[test]

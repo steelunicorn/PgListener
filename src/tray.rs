@@ -1,7 +1,7 @@
 //! Значок в области уведомлений (только Windows) и иконка приложения.
 
-use std::sync::mpsc;
 use crate::i18n::{Key, t};
+use std::sync::mpsc;
 
 #[cfg_attr(not(windows), allow(dead_code))]
 pub enum TrayCmd {
@@ -9,27 +9,9 @@ pub enum TrayCmd {
     Quit,
 }
 
-/// Иконка: синий круг с белым кольцом и точкой. Возвращает RGBA size×size.
-pub fn icon_rgba(size: u32) -> Vec<u8> {
-    let mut px = Vec::with_capacity((size * size * 4) as usize);
-    let c = (size as f32 - 1.0) / 2.0;
-    let r = size as f32 / 2.0;
-    for y in 0..size {
-        for x in 0..size {
-            let d = ((x as f32 - c).powi(2) + (y as f32 - c).powi(2)).sqrt() / r;
-            // Сглаживание края круга.
-            let alpha = ((1.0 - d) * r).clamp(0.0, 1.0);
-            let white = (0.45..0.62).contains(&d) || d < 0.2;
-            let (cr, cg, cb) = if white { (255, 255, 255) } else { (47, 111, 181) };
-            px.extend_from_slice(&[cr, cg, cb, (alpha * 255.0) as u8]);
-        }
-    }
-    px
-}
-
 pub struct Tray {
     #[cfg(windows)]
-    _icon: tray_icon::TrayIcon,
+    icon: tray_icon::TrayIcon,
     rx: mpsc::Receiver<TrayCmd>,
 }
 
@@ -75,7 +57,9 @@ impl Tray {
             }
         }));
 
-        let icon = tray_icon::Icon::from_rgba(icon_rgba(32), 32, 32).ok()?;
+        let size = crate::icons::TRAY_SIZE;
+        let rgba = crate::icons::rgba(crate::icons::DARK.tray, size).unwrap_or_default();
+        let icon = tray_icon::Icon::from_rgba(rgba, size, size).ok()?;
         let tray = TrayIconBuilder::new()
             .with_tooltip("PgListener")
             .with_icon(icon)
@@ -83,12 +67,22 @@ impl Tray {
             .with_menu_on_left_click(false)
             .build()
             .ok()?;
-        Some(Self { _icon: tray, rx })
+        Some(Self { icon: tray, rx })
     }
 
     #[cfg(not(windows))]
     pub fn new(_ctx: &egui::Context) -> Option<Self> {
         None
+    }
+
+    /// Меняет иконку в области уведомлений (при смене темы оформления).
+    pub fn set_icon(&self, rgba: Vec<u8>, size: u32) {
+        #[cfg(windows)]
+        if let Ok(icon) = tray_icon::Icon::from_rgba(rgba, size, size) {
+            let _ = self.icon.set_icon(Some(icon));
+        }
+        #[cfg(not(windows))]
+        let _ = (rgba, size);
     }
 
     pub fn poll(&self) -> Option<TrayCmd> {

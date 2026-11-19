@@ -5,14 +5,36 @@ mod app;
 mod bridge;
 mod crypto;
 mod i18n;
+mod icons;
 mod logfile;
 mod model;
 mod storage;
 mod tray;
+mod winicon;
 mod worker;
 
 use crate::i18n::{Key, tf};
 use std::path::PathBuf;
+use std::sync::Arc;
+
+/// Набор значков по сохранённой теме: до первого кадра окно уже должно быть с ней.
+fn saved_theme_art() -> &'static icons::Art {
+    let key = storage::Storage::open(&app_dir().join("pglistener.db"))
+        .ok()
+        .and_then(|s| s.setting("theme"));
+    match key.as_deref() {
+        Some("light") => &icons::LIGHT,
+        Some("hacker") => &icons::MATRIX,
+        _ => &icons::DARK,
+    }
+}
+
+/// Иконка окна до первого кадра: дальше её подменяет `App` под выбранную тему.
+fn startup_icon() -> Option<Arc<egui::IconData>> {
+    let size = icons::WINDOW_SIZE;
+    let rgba = icons::rgba(saved_theme_art().window, size)?;
+    Some(Arc::new(egui::IconData { rgba, width: size, height: size }))
+}
 
 /// Каталог исполняемого файла: здесь лежат база настроек и папка logs (portable-режим).
 pub fn app_dir() -> PathBuf {
@@ -23,17 +45,16 @@ pub fn app_dir() -> PathBuf {
 }
 
 fn run(renderer: eframe::Renderer) -> eframe::Result {
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_title("PgListener")
+        .with_inner_size([1200.0, 750.0])
+        .with_min_inner_size([700.0, 400.0]);
+    if let Some(icon) = startup_icon() {
+        viewport = viewport.with_icon(icon);
+    }
     let options = eframe::NativeOptions {
         renderer,
-        viewport: egui::ViewportBuilder::default()
-            .with_title("PgListener")
-            .with_inner_size([1200.0, 750.0])
-            .with_min_inner_size([700.0, 400.0])
-            .with_icon(std::sync::Arc::new(egui::IconData {
-                rgba: tray::icon_rgba(64),
-                width: 64,
-                height: 64,
-            })),
+        viewport,
         ..Default::default()
     };
     eframe::run_native(
