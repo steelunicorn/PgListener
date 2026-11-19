@@ -1,91 +1,100 @@
 # PgListener
 
-**Русский** · [English](README.en.md)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+[![Release](https://img.shields.io/github/v/release/steelunicorn/PgListener?label=release)](https://github.com/steelunicorn/PgListener/releases/latest)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](#building-on-windows)
 
-[![Лицензия](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#лицензия)
-[![Релиз](https://img.shields.io/github/v/release/steelunicorn/PgListener?label=release)](https://github.com/steelunicorn/PgListener/releases/latest)
-[![Платформа](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](#сборка-под-windows)
+[Русский](README.ru.md) · **English**
 
-Приложение для Windows (работает и на Linux/macOS), которое слушает каналы PostgreSQL `LISTEN/NOTIFY`, пишет их в файлы с посуточной ротацией и показывает лог в реальном времени.
+A Windows application (also runs on Linux/macOS) that listens to PostgreSQL `LISTEN/NOTIFY` channels, writes them to files with daily rotation and shows the log in real time.
 
-Написано на Rust с GUI на egui. В результате получается один `pglistener.exe` размером около 11 МБ (после упаковки UPX — около 5 МБ), которому нужны только системные DLL Windows. SQLite, TLS, SSH и шрифты встроены.
+It is written in Rust with an egui GUI and ships as a single `pglistener.exe` about 11 MB in size (~5 MB after UPX packing), which needs only the standard Windows DLLs. SQLite, TLS, SSH and fonts are built in.
 
-## Скачать
+> The application UI is currently in Russian. UI labels are translated in this document, with the original Russian wording in quotes where it matters.
 
-**[Скачать последнюю версию](https://github.com/steelunicorn/PgListener/releases/latest)** — `pglistener.exe` для Windows x64. Файл портативный: положите его в любую папку и запустите, установка не нужна. Visual C++ Redistributable тоже не требуется. Настройки (`pglistener.db`) и логи (`logs\`) создаются рядом с exe.
+## Screenshot
 
-Выпущенный exe не подписан, поэтому при первом запуске SmartScreen может показать предупреждение: «Подробнее» → «Выполнить в любом случае».
+![PgListener window: live log with channels, search and the tail -f chip](docs/screenshot.png)
 
-Готовых сборок для Linux/macOS нет, но проект собирается из исходников — см. «Сборка под Windows» ниже.
+## Download
 
-## Содержание
+**[Download the latest release](https://github.com/steelunicorn/PgListener/releases/latest)** — `pglistener.exe` for Windows x64. It is portable: put the file in any folder and run it, no installation is needed. The Visual C++ Redistributable is not required either. Settings (`pglistener.db`) and logs (`logs\`) are created next to the exe.
 
-- [Возможности](#возможности)
-- [Логи](#логи)
-- [Мост](#мост)
-- [Функция логирования в PostgreSQL](#функция-логирования-в-postgresql)
-- [Сборка под Windows](#сборка-под-windows)
-- [Графика](#графика)
-- [Структура исходников](#структура-исходников)
-- [Безопасность](#безопасность)
-- [Обратная связь](#обратная-связь)
-- [Лицензия](#лицензия)
+The released exe is not code-signed, so on the first launch SmartScreen may show a warning: click «More info» → «Run anyway».
 
-## Возможности
+There are no ready-made builds for Linux/macOS, but the project builds from source — see “Building on Windows” below.
 
-- Каталог подключений с вложенными папками. Создание, переименование, удаление и перенос делаются через контекстное меню (правая кнопка мыши) и кнопки над деревом.
-- В подключении задаются имя, хост, порт, база, логин, пароль, режим SSL (`disable`, `prefer`, `require`) и каталог логов. Можно включить SSH-туннель с входом по паролю (с запасным вариантом keyboard-interactive) или по ключу OpenSSH/PEM, в том числе зашифрованному паролем.
-- Каналы добавляются и удаляются на лету, без переподключения: в строке «Каналы» главного окна или в свойствах подключения. Чипы в этой строке переключают показ: щелчок скрывает или показывает строки канала, правая кнопка — «показывать только этот канал», ✖ — перестать слушать канал; кнопка «Все» возвращает все каналы.
-- Лог показывается общим списком («Все», вместе со служебными сообщениями `*`); какие каналы в нём видны, задаётся чипами каналов. В окне хранятся последние 20 000 сообщений с момента запуска, даже если календарные сутки сменились; при открытии подключения история подгружается из файлов, а при переподключении уже показанные строки не теряются. Длинные сообщения переносятся по ширине окна (горизонтальной прокрутки нет), переводы строк внутри сообщения отображаются как есть; продолжения перенесённых строк идут без отступа, от левого края.
-- Слежение за концом лога: чип «✓ tail -f» справа от строки «Строк в окне…». Пока он включён, окно держится на последней строке, и новые сообщения прокручивают его вниз. Переход к найденной строке снимает слежение (даже если совпадение оказалось внизу), как и обычная прокрутка вверх; вернуть его можно щелчком по чипу или своей прокруткой до низа. Снятие поиска само окно не двигает и слежение не возвращает. Состояние у каждого подключения своё и между запусками не сохраняется.
-- Фильтры по подстрокам, регистр не учитывается, сохраняются для каждого подключения:
-  - «Показывать только строки с» — если задан хотя бы один, видны только строки, содержащие любую из подстрок;
-  - «Скрывать строки с» — строки, содержащие любую из подстрок, скрываются (применяется после включающего фильтра).
-- Поиск по показанным строкам: запросы можно закреплять — Enter добавляет введённый запрос в список, у каждого запроса своя подсветка своим цветом и своя навигация (⏶/⏷ в его чипе), Shift+Enter или кнопки ⏷/⏶ идут по всем совпадениям, «Сбросить» убирает закреплённые запросы. Ctrl+F — перейти в поле поиска, Esc — очистить поле (если оно пустое — все закреплённые запросы). Совпадения подсвечиваются, текущее выделено оранжевым, счётчик «N из M». При новом запросе выбирается самое свежее совпадение.
-- Если выделить мышью текст в любой строке лога (протянуть или дважды щёлкнуть по слову), все его вхождения в показанных строках подсвечиваются голубым, регистр не учитывается. Подсветка пропадает, когда выделение снято. Выделение через несколько строк не подсвечивается.
-- Мост для локальной сети: PgListener принимает подключения других ПК и пробрасывает их к БД (см. «Мост»).
-- При обрыве связи приложение переподключается само с паузами 1, 2, 5, 10, 20 и 30 с. Раз в 30 с соединение проверяется запросом `SELECT 1`.
-- Сворачивание в трей (Windows): свёрнутое окно прячется в область уведомлений. Окно возвращается щелчком по значку, а через меню значка можно выйти. Включается в настройках (кнопка ⚙) флажком «Сворачивать в трей».
-- Оформление: темы «как в системе», светлая, тёмная и «Матрица» (приглушённый зелёный). Кнопка ⚙ в заголовке открывает настройки: переключатель языка RU|EN и селектор темы в верхней строке, «Сворачивать в трей», «Системные сообщения» и строка с именем рендерера; при программной отрисовке там же выводится предупреждение.
-- Язык интерфейса: русский или английский, переключатель RU|EN в настройках рядом с селектором темы. При первом запуске язык берётся из локали Windows (русская локаль — русский, иначе английский) и запоминается в `pglistener.db`. Пока язык ни разу не выбран, его можно задать переменной окружения `PGLISTENER_LANG=ru` или `PGLISTENER_LANG=en`. Текст уже полученных сообщений не переводится, имена подключений, папок и каналов тоже.
-- При запуске приложение спрашивает, восстановить ли подключения, которые были активны при закрытии.
-- Пароли подключений можно зашифровать мастер-паролем (см. «Безопасность»).
-- Portable-режим: настройки хранятся в `pglistener.db` (SQLite), логи в `logs\`, обе папки лежат рядом с exe.
+## Contents
 
-## Логи
+- [Screenshot](#screenshot)
+- [Features](#features)
+- [Logs](#logs)
+- [Bridge](#bridge)
+- [PostgreSQL logging function](#postgresql-logging-function)
+- [Building on Windows](#building-on-windows)
+- [Graphics](#graphics)
+- [Source layout](#source-layout)
+- [Security](#security)
+- [Feedback](#feedback)
+- [License](#license)
+
+## Features
+
+- A connection catalog with nested folders. Creating, renaming, deleting and moving are done through the context menu (right mouse button) and the buttons above the tree.
+- A connection stores its name, host, port, database, login, password, SSL mode (`disable`, `prefer`, `require`) and log directory. An SSH tunnel can be enabled, authenticating with a password (with keyboard-interactive as a fallback) or with an OpenSSH/PEM key, including a passphrase-protected one.
+- Channels are added and removed on the fly, without reconnecting: in the “Channels” row of the main window or in the connection properties. The chips in that row toggle visibility: a click hides or shows the rows of a channel, the right button means “show only this channel”, ✖ stops listening to a channel; the “All” button brings all channels back.
+- The log is shown as a single list (“All”, including service messages marked `*`); which channels are visible is defined by the channel chips. The window keeps the last 20,000 messages since the application started, even if the calendar day has changed; when a connection is opened the history is loaded from files, and a reconnect does not discard the rows already shown. Long messages wrap to the window width (there is no horizontal scrolling), and line breaks inside a message are displayed as is; continuation lines have no indent and start at the left edge.
+- Log tailing: the “✓ tail -f” chip to the right of the “Lines in window…” row. While it is on, the window stays on the last line and new messages scroll it down. Jumping to a search match turns tailing off (even if the match happens to be at the bottom), as does scrolling up manually; it can be turned back on with a chip click or by scrolling to the bottom yourself. Clearing the search neither moves the view nor restores tailing. The state is per connection and is not persisted between runs.
+- Substring filters, case-insensitive, stored per connection:
+  - “Show only lines containing” — if at least one is set, only lines containing any of the substrings are visible;
+  - “Hide lines containing” — lines containing any of the substrings are hidden (applied after the include filter).
+- Search over the shown lines: queries can be pinned — Enter adds the entered query to the list, each query has its own highlight color and its own navigation (⏶/⏷ in its chip), Shift+Enter or the ⏷/⏶ buttons walk all matches, “Reset” removes the pinned queries. Ctrl+F jumps to the search field, Esc clears the field (or all pinned queries if the field is empty). Matches are highlighted, the current one is orange, the counter shows “N of M”. A new query selects the most recent match.
+- Selecting text in any log line with the mouse (drag or double-click a word) highlights all its occurrences in the shown lines in blue, case-insensitively. The highlight disappears when the selection is cleared. Selections spanning several lines are not highlighted.
+- A bridge for the local network: PgListener accepts connections from other computers and forwards them to the database (see “Bridge”).
+- On connection loss the application reconnects by itself with delays of 1, 2, 5, 10, 20 and 30 s. Once every 30 s the connection is checked with a `SELECT 1` query.
+- Minimizing to the tray (Windows): a minimized window hides in the notification area. The window comes back with a click on the icon, and the icon menu can be used to exit. Enabled in the settings (⚙ button) with the “Minimize to tray” checkbox.
+- Appearance: “system”, light, dark and “Matrix” themes (muted green). The ⚙ button in the header opens the settings: the RU|EN language switch and the theme selector in the top row, “Minimize to tray”, “Service messages” and the renderer name line; with software rendering a warning is displayed there as well.
+- Interface language: Russian or English, the RU|EN switch in the settings next to the theme selector. On the first run the language comes from the Windows locale (Russian locale — Russian, otherwise English) and is remembered in `pglistener.db`. Until a language has been chosen, it can be set with the `PGLISTENER_LANG=ru` or `PGLISTENER_LANG=en` environment variable. Already received messages are not retranslated, neither are connection, folder and channel names.
+- On startup the application asks whether to restore the connections that were active when it was closed.
+- Connection passwords can be encrypted with a master password (see “Security”).
+- Portable mode: settings are stored in `pglistener.db` (SQLite), logs in `logs\`, both next to the exe.
+
+## Logs
 
 ```
-<папка exe>\logs\<каталог логов>\<канал>.log              текущие сутки
-<папка exe>\logs\<каталог логов>\<канал>.2026-10-22.log   прошлые сутки
+<exe folder>\logs\<log directory>\<channel>.log              current day
+<exe folder>\logs\<log directory>\<channel>.2026-10-22.log   previous days
 ```
 
-Каталог логов задаётся в свойствах подключения. Если поле пустое, используется имя подключения (недопустимые в именах файлов символы заменяются на `_`). Формат строки: `2026-10-23 11:24:10.944: текст сообщения`.
+The log directory is set in the connection properties. If the field is empty, the connection name is used (characters not allowed in file names are replaced with `_`). The line format is `2026-10-23 11:24:10.944: message text`.
 
-Служебные сообщения (`*`: подключение, ошибки, мост) показываются только в окне лога и в файлы не пишутся. От старых версий рядом с логами могут оставаться файлы `_pglistener*.log`, приложение их больше не читает.
+Service messages (`*`: connection, errors, bridge) are shown only in the log window and are not written to files. Old versions may have left `_pglistener*.log` files next to the logs; the application no longer reads them.
 
-## Мост
+## Bridge
 
-Мост позволяет другим ПК в локальной сети подключаться к БД через компьютер с PgListener. Это удобно, когда БД доступна только с этого ПК, например через SSH-туннель.
+The bridge lets other computers on the local network connect to the database through the machine running PgListener. This is handy when the database is reachable only from that machine, for example through an SSH tunnel.
 
-Мост включается в свойствах подключения флажком «Мост: пускать к БД клиентов из локальной сети». Там задаются:
-- адрес прослушивания: `0.0.0.0` означает все сетевые интерфейсы, `127.0.0.1` только этот ПК;
-- порт, по умолчанию `15432`;
-- разрешённые адреса: IP и подсети через запятую, например `192.168.1.0/24, 10.0.0.5`. Если список пустой, допускаются все.
+The bridge is enabled in the connection properties with the “Bridge: let local network clients reach the database” checkbox. It configures:
 
-Мост работает, пока подключение активно, и не зависит от того, удалось ли подключение для LISTEN. Каждое входящее TCP-соединение пробрасывается к серверу БД напрямую или через SSH-туннель подключения. Все соединения через SSH идут в одной SSH-сессии.
+- the listen address: `0.0.0.0` means all network interfaces, `127.0.0.1` means this computer only;
+- the port, `15432` by default;
+- allowed addresses: IPs and subnets separated by commas, for example `192.168.1.0/24, 10.0.0.5`. An empty list allows everyone.
 
-На другом ПК в DBeaver, psql или приложении указываются адрес ПК с PgListener и порт моста. Имя базы, логин и пароль клиент вводит свои: PgListener только передаёт трафик и не подставляет сохранённые учётные данные. SSL работает напрямую между клиентом и сервером.
+The bridge works while the connection is active and does not depend on whether the LISTEN connection succeeded. Every incoming TCP connection is forwarded to the database server directly or through the connection's SSH tunnel. All SSH connections share a single SSH session.
 
-Подключения, отключения и отклонённые адреса показываются в служебных сообщениях окна лога (`*`).
+On another computer, point DBeaver, psql or your application at the PgListener machine and the bridge port. The database name, login and password are entered by the client: PgListener only forwards traffic and does not substitute the saved credentials. SSL works directly between the client and the server.
 
-Что нужно учесть:
-- при первом запуске моста Windows спросит разрешение в брандмауэре, для доступа из сети его нужно дать;
-- для `pg_hba.conf` все клиенты моста выглядят как ПК с PgListener, а при SSH-туннеле как сам SSH-сервер;
-- изменённые настройки моста применяются сразу: активное подключение переподключается.
+Connections, disconnections and rejected addresses are reported in the service messages of the log window (`*`).
 
-## Функция логирования в PostgreSQL
+Things to keep in mind:
 
-Файл [`sql/log_notify.sql`](sql/log_notify.sql) нужно выполнить в базе (PostgreSQL 14+).
+- on the first bridge start Windows asks for a firewall permission; it must be granted for network access;
+- in `pg_hba.conf` all bridge clients look like the PgListener machine, and with an SSH tunnel like the SSH server itself;
+- changed bridge settings are applied immediately: the active connection reconnects.
+
+## PostgreSQL logging function
+
+Run [`sql/log_notify.sql`](sql/log_notify.sql) in the database (PostgreSQL 14+).
 
 ```sql
 CREATE FUNCTION app.process_orders(n int) RETURNS void LANGUAGE plpgsql AS $$
@@ -94,108 +103,109 @@ BEGIN
 END $$;
 
 SELECT app.process_orders(10);
--- в канал orders придёт: [app.process_orders] обработано 10 заказов
+-- the orders channel receives: [app.process_orders] обработано 10 заказов
 ```
 
-Имя вызывающей функции определяется по стеку вызовов. Работает для функций, процедур и триггерных функций. Схема в имени выводится, если функция не видна через `search_path`. Если вызов сделан из анонимного блока `DO`, подставляется `[DO]`, если напрямую из SQL, то `[SQL]`. Функции на языке `LANGUAGE sql` PostgreSQL обычно встраивает в вызывающий запрос, поэтому для них тоже будет `[SQL]`. Сообщения длиннее 8000 байт (это лимит NOTIFY) обрезаются с `…` на конце.
+The caller's function name is determined from the call stack. It works for functions, procedures and trigger functions. The schema is included in the name if the function is not visible through `search_path`. Calls from an anonymous `DO` block produce `[DO]`, calls made directly from SQL produce `[SQL]`. PostgreSQL usually inlines `LANGUAGE sql` functions into the calling statement, so they also produce `[SQL]`. Messages longer than 8000 bytes (the NOTIFY limit) are truncated with `…` at the end.
 
-Особенности NOTIFY, о которых стоит помнить:
-- уведомления доставляются только после `COMMIT`, а при откате транзакции теряются;
-- одинаковые сообщения в один канал в пределах одной транзакции сливаются в одно;
-- пока приложение не подключено, сообщения никуда не сохраняются, это свойство самого LISTEN/NOTIFY.
+NOTIFY quirks worth remembering:
 
-## Сборка под Windows
+- notifications are delivered only after `COMMIT`, and are lost if the transaction rolls back;
+- identical messages to the same channel within one transaction are merged into one;
+- while the application is not connected, messages are not stored anywhere — that is how LISTEN/NOTIFY works.
 
-1. Установите **Rust** с https://rustup.rs (`rustup-init.exe`, вариант по умолчанию `x86_64-pc-windows-msvc`).
-2. Установите **Visual Studio Build Tools** (https://visualstudio.microsoft.com/visual-cpp-build-tools/) с рабочей нагрузкой «Разработка классических приложений на C++». Нужны MSVC и Windows SDK: из C собираются SQLite и криптобиблиотека `ring`. Если ставили Rust через rustup-init, он сам предложит установить Build Tools.
-3. В папке с исходниками выполните:
+## Building on Windows
+
+1. Install **Rust** from https://rustup.rs (`rustup-init.exe`, the default `x86_64-pc-windows-msvc` toolchain).
+2. Install **Visual Studio Build Tools** (https://visualstudio.microsoft.com/visual-cpp-build-tools/) with the “Desktop development with C++” workload. MSVC and the Windows SDK are needed: SQLite and the `ring` crypto library are built from C. If Rust was installed with rustup-init, it offers to install the Build Tools itself.
+3. In the source folder run:
    ```
    cargo build --release
    ```
-4. Готовый файл появится в `target\release\pglistener.exe`. Его можно скопировать в любую папку и запускать. Visual C++ Redistributable не нужен: C runtime линкуется статически, это настроено в `.cargo\config.toml`.
+4. The binary appears at `target\release\pglistener.exe`. Copy it to any folder and run it. The Visual C++ Redistributable is not needed: the C runtime is statically linked, which is configured in `.cargo\config.toml`.
 
-Первая сборка занимает 3–10 минут, потому что зависимости скачиваются и компилируются.
+The first build takes 3–10 minutes because the dependencies are downloaded and compiled.
 
-### Скрипт сборки
+### Build script
 
-`build.cmd` (двойной щелчок) или `.\build.ps1` в PowerShell собирает релиз, кладёт `pglistener.exe` в папку над исходниками и, если всё прошло успешно, удаляет папку `target` (`cargo clean`). При ошибке `target` остаётся. Параметры:
+`build.cmd` (double-click) or `.\build.ps1` in PowerShell builds the release, puts `pglistener.exe` in the folder above the sources and, if everything succeeded, deletes the `target` folder (`cargo clean`). On error `target` is kept. Parameters:
 
-- `-OutDir <папка>` — куда положить exe;
-- `-KeepTarget` — не удалять `target`; следующая сборка тогда пойдёт быстрее.
+- `-OutDir <folder>` — where to put the exe;
+- `-KeepTarget` — do not delete `target`; the next build will then be faster.
 
-Без `-KeepTarget` каждая сборка начинается с нуля и занимает те же 3–10 минут.
+Without `-KeepTarget` every build starts from scratch and takes the same 3–10 minutes.
 
-Рядом с готовым exe (папка над исходниками) лежит своя обёртка `build.ps1` / `build.cmd`: она вызывает эту же сборку и кладёт exe в свою папку. С ключом `-Upx` готовая программа дополнительно упаковывается UPX (ищется в `PATH` или в `..\tools\upx.exe`) с проверкой `upx -t`; если упаковка не удалась, остаётся обычный exe и выводится ошибка.
+Next to the resulting exe (the folder above the sources) there is its own `build.ps1` / `build.cmd` wrapper: it runs the same build and puts the exe in its own folder. With the `-Upx` switch the resulting program is additionally packed with UPX (looked up in `PATH` or in `..\tools\upx.exe`) and verified with `upx -t`; if packing fails, the plain exe is kept and an error is printed.
 
-### Кросс-сборка exe из Linux
+### Cross-compiling the exe from Linux
 
 ```bash
 sudo apt install mingw-w64
 rustup target add x86_64-pc-windows-gnu
 cargo build --release --target x86_64-pc-windows-gnu
-# результат: target/x86_64-pc-windows-gnu/release/pglistener.exe
+# result: target/x86_64-pc-windows-gnu/release/pglistener.exe
 ```
 
-### Сборка под Linux/macOS
+### Building on Linux/macOS
 
 ```bash
-cargo build --release      # результат: target/release/pglistener
+cargo build --release      # result: target/release/pglistener
 ```
 
-На Linux для сборки нужен `libssl-dev`, а для работы `libxkbcommon-x11-0` (X11) или Wayland.
+On Linux, building requires `libssl-dev`, and running requires `libxkbcommon-x11-0` (X11) or Wayland.
 
-## Графика
+## Graphics
 
-Окно рисуется через OpenGL. Если OpenGL нет (RDP, виртуальная машина без 3D-драйвера: там Windows даёт только OpenGL 1.1), приложение само переключается на DirectX 12 (wgpu). Без видеокарты DirectX 12 рисует программно (WARP), и тогда прокрутка и обновление лога заметно нагружают процессор.
+The window is rendered with OpenGL. If OpenGL is unavailable (RDP, a virtual machine without a 3D driver: Windows then only provides OpenGL 1.1), the application switches to DirectX 12 (wgpu) by itself. Without a GPU, DirectX 12 renders in software (WARP), and scrolling and log updates noticeably load the CPU.
 
-С видеокартой оба способа тратят одинаково процессора, но OpenGL берёт втрое меньше памяти (около 30–40 МБ против 110 МБ).
+With a GPU, both methods use the same amount of CPU, but OpenGL takes three times less memory (about 30–40 MB versus 110 MB).
 
-Чем рисуется окно, видно в настройках (кнопка ⚙, строка с именем рендерера); при программной отрисовке там же выводится предупреждение. Выбрать способ принудительно можно переменной окружения `PGLISTENER_RENDERER=opengl` или `PGLISTENER_RENDERER=dx12`.
+The active renderer is shown in the settings (⚙ button, the renderer name line); with software rendering a warning is displayed there too. The renderer can be forced with the `PGLISTENER_RENDERER=opengl` or `PGLISTENER_RENDERER=dx12` environment variable.
 
-## Структура исходников
+## Source layout
 
-| Файл | Назначение |
+| File | Purpose |
 |---|---|
-| `src/main.rs` | запуск, выбор рендерера |
-| `src/app.rs` | интерфейс: дерево подключений, лог, фильтры, поиск, темы, диалоги |
-| `src/i18n.rs` | строки интерфейса на русском и английском, выбор языка |
-| `src/worker.rs` | SSH-туннель, подключение к PostgreSQL, LISTEN/UNLISTEN, переподключение |
-| `src/bridge.rs` | мост: приём подключений из сети и проброс к БД |
-| `src/logfile.rs` | запись логов с посуточной ротацией, чтение строк текущих суток |
-| `src/tray.rs` | значок в трее (Windows), иконка приложения |
-| `src/crypto.rs` | шифрование паролей (AES-256-GCM, Argon2, DPAPI) |
-| `src/storage.rs` | хранение папок и подключений в SQLite |
-| `src/model.rs` | общие типы |
-| `sql/log_notify.sql` | функция логирования для PostgreSQL |
-| `build.ps1`, `build.cmd` | сборка релиза, установка exe над исходниками и очистка `target` |
-| `LICENSE-MIT`, `LICENSE-APACHE` | условия лицензии (двойная лицензия, см. «Лицензия») |
+| `src/main.rs` | startup, renderer selection |
+| `src/app.rs` | UI: connection tree, log, filters, search, themes, dialogs |
+| `src/i18n.rs` | UI strings in Russian and English, language selection |
+| `src/worker.rs` | SSH tunnel, PostgreSQL connection, LISTEN/UNLISTEN, reconnecting |
+| `src/bridge.rs` | bridge: accepting network connections and forwarding them to the database |
+| `src/logfile.rs` | writing logs with daily rotation, reading the current day's lines |
+| `src/tray.rs` | tray icon (Windows), application icon |
+| `src/crypto.rs` | password encryption (AES-256-GCM, Argon2, DPAPI) |
+| `src/storage.rs` | storing folders and connections in SQLite |
+| `src/model.rs` | shared types |
+| `sql/log_notify.sql` | logging function for PostgreSQL |
+| `build.ps1`, `build.cmd` | release build, installing the exe above the sources and cleaning `target` |
+| `LICENSE-MIT`, `LICENSE-APACHE` | license terms (dual license, see “License”) |
 
-## Безопасность
+## Security
 
-### Мастер-пароль
+### Master password
 
-Пароли к БД, SSH и паролям ключей можно зашифровать мастер-паролем: кнопка 🔓/🔒 над деревом подключений.
+Database, SSH and key passphrase passwords can be encrypted with a master password: the 🔓/🔒 button above the connection tree.
 
-- Шифрование AES-256-GCM, ключ получается из мастер-пароля через Argon2id. В базе хранятся только соль и контрольное значение, сам мастер-пароль нигде не сохраняется. Имена, хосты, логины и каналы не шифруются.
-- При запуске приложение спрашивает мастер-пароль. Если отметить «Запомнить на этом компьютере» (только Windows), ключ сохраняется в базе, защищённый DPAPI текущей учётной записи Windows. Под этой учётной записью пароль больше не спрашивается, а на другом компьютере или под другим пользователем его снова нужно ввести. Папка остаётся переносимой.
-- В том же окне мастер-пароль можно сменить или снять (тогда пароли снова хранятся открытым текстом).
-- Если мастер-пароль забыт, в окне ввода есть «Забыл пароль…»: все сохранённые пароли подключений стираются, остальные настройки остаются, пароли вводятся заново.
+- Encryption is AES-256-GCM, the key is derived from the master password with Argon2id. Only the salt and a verification value are stored in the database; the master password itself is never saved anywhere. Names, hosts, logins and channels are not encrypted.
+- On startup the application asks for the master password. If “Remember on this computer” is checked (Windows only), the key is stored in the database protected by the DPAPI of the current Windows account. That account is no longer asked for the password, while on another computer or under another user it must be entered again. The folder stays portable.
+- In the same dialog the master password can be changed or removed (passwords are then stored in plain text again).
+- If the master password is forgotten, the input dialog has a “Forgot password…” option: all saved connection passwords are wiped, the other settings are kept, and the passwords must be entered again.
 
-Без мастер-пароля пароли хранятся в `pglistener.db` открытым текстом.
+Without a master password the passwords are stored in `pglistener.db` in plain text.
 
-### Прочее
+### Other notes
 
-Ключ SSH-сервера не проверяется (как `AutoAddPolicy` в paramiko/sshtunnel). Сертификат PostgreSQL в режимах `prefer` и `require` тоже не проверяется, так же ведёт себя libpq.
+The SSH server key is not verified (like `AutoAddPolicy` in paramiko/sshtunnel). The PostgreSQL certificate is not verified in the `prefer` and `require` modes either, which is also what libpq does.
 
-## Обратная связь
+## Feedback
 
-Нашли ошибку, есть предложение или вопрос — создайте [issue](https://github.com/steelunicorn/PgListener/issues). Пул-реквесты приветствуются: перед крупными изменениями лучше сначала обсудить идею в issue.
+Found a bug, have a suggestion or a question — open an [issue](https://github.com/steelunicorn/PgListener/issues). Pull requests are welcome: for larger changes it is better to discuss the idea in an issue first.
 
-## Лицензия
+## License
 
-Проект распространяется по двойной лицензии **MIT OR Apache-2.0**: вы можете выбрать любую из двух, ту, что удобнее для вашего проекта.
+The project is distributed under the dual **MIT OR Apache-2.0** license: you may choose either of the two, whichever suits your project better.
 
-- [LICENSE-MIT](LICENSE-MIT) — короткая разрешительная лицензия;
-- [LICENSE-APACHE](LICENSE-APACHE) — то же плюс явная патентная лицензия и условия про товарные знаки.
+- [LICENSE-MIT](LICENSE-MIT) — a short permissive license;
+- [LICENSE-APACHE](LICENSE-APACHE) — the same plus an explicit patent license and trademark terms.
 
-Обе лицензии разрешают использовать код в открытых и закрытых продуктах, в том числе коммерчески, при сохранении уведомления об авторских правах и текста лицензии. Если не знаете, что выбрать: MIT проще, Apache-2.0 обычно предпочитают компании (явные патентные гарантии).
+Both licenses allow using the code in open and closed products, including commercially, provided the copyright notice and license text are retained. If unsure, MIT is simpler, while companies usually prefer Apache-2.0 (explicit patent guarantees).
