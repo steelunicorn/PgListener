@@ -6,6 +6,7 @@ use aes_gcm::{Aes256Gcm, Nonce};
 use anyhow::{anyhow, Result};
 
 /// Префикс зашифрованного значения в базе.
+use crate::i18n::{Key as TKey, t};
 const PREFIX: &str = "enc1:";
 const NONCE_LEN: usize = 12;
 
@@ -55,16 +56,16 @@ impl Key {
         let Some(hex) = value.strip_prefix(PREFIX) else {
             return Ok(value.to_string());
         };
-        let data = from_hex(hex).ok_or_else(|| anyhow!("повреждённое значение"))?;
+        let data = from_hex(hex).ok_or_else(|| anyhow!(t(TKey::CorruptedValue)))?;
         if data.len() < NONCE_LEN {
-            return Err(anyhow!("повреждённое значение"));
+            return Err(anyhow!(t(TKey::CorruptedValue)));
         }
         let (n, ct) = data.split_at(NONCE_LEN);
-        let nonce = Nonce::try_from(n).map_err(|_| anyhow!("повреждённое значение"))?;
+        let nonce = Nonce::try_from(n).map_err(|_| anyhow!(t(TKey::CorruptedValue)))?;
         let plain = self
             .cipher()
             .decrypt(&nonce, ct)
-            .map_err(|_| anyhow!("неверный ключ"))?;
+            .map_err(|_| anyhow!(t(TKey::WrongKey)))?;
         Ok(String::from_utf8(plain)?)
     }
 }
@@ -75,7 +76,7 @@ pub fn is_encrypted(value: &str) -> bool {
 
 pub fn random<const N: usize>() -> [u8; N] {
     let mut b = [0u8; N];
-    getrandom::fill(&mut b).expect("системный генератор случайных чисел");
+    getrandom::fill(&mut b).expect(t(TKey::SystemRng));
     b
 }
 

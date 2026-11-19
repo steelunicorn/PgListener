@@ -1,5 +1,6 @@
 use chrono::NaiveDateTime;
 use std::sync::Arc;
+use crate::i18n::{Key, t};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SslMode {
@@ -127,7 +128,7 @@ impl Default for ConnConfig {
         Self {
             id: 0,
             folder_id: None,
-            name: "Новое подключение".into(),
+            name: t(Key::NewConnection).into(),
             host: "localhost".into(),
             port: 5432,
             dbname: "postgres".into(),

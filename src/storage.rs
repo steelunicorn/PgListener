@@ -3,6 +3,7 @@ use crate::model::*;
 use anyhow::{bail, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
+use crate::i18n::{Key as TKey, t};
 
 pub struct Storage {
     db: Connection,
@@ -335,7 +336,7 @@ impl Storage {
     /// Разблокирует базу мастер-паролем. Возвращает false, если пароль неверный.
     pub fn unlock(&mut self, password: &str, remember: bool) -> Result<bool> {
         let Some(salt) = self.setting("crypto_salt").and_then(|s| crypto::from_hex(&s)) else {
-            bail!("в базе нет параметров шифрования");
+            bail!(t(TKey::NoCryptoParams));
         };
         let key = Key::derive(password, &salt)?;
         if !self.check_key(&key) {
@@ -376,7 +377,7 @@ impl Storage {
         #[cfg(windows)]
         if let Some(key) = &self.key {
             let Some(blob) = crypto::dpapi_protect(key.bytes()) else {
-                bail!("DPAPI: не удалось защитить ключ");
+                bail!(t(TKey::DpapiProtectFailed));
             };
             return self.set_setting("crypto_dpapi", &crypto::to_hex(&blob));
         }
@@ -391,7 +392,7 @@ impl Storage {
     /// База должна быть разблокирована.
     pub fn set_master(&mut self, new: Option<&str>, remember: bool) -> Result<()> {
         if self.lock_state() == Lock::Locked {
-            bail!("база заблокирована");
+            bail!(t(TKey::DbLocked));
         }
         let conns = self.connections()?;
         self.db.execute_batch("BEGIN")?;

@@ -48,7 +48,8 @@ There are no ready-made builds for Linux/macOS, but the project builds from sour
 - A bridge for the local network: PgListener accepts connections from other computers and forwards them to the database (see “Bridge”).
 - On connection loss the application reconnects by itself with delays of 1, 2, 5, 10, 20 and 30 s. Once every 30 s the connection is checked with a `SELECT 1` query.
 - Minimizing to the tray (Windows): a minimized window hides in the notification area. The window comes back with a click on the icon, and the icon menu can be used to exit. Enabled in the settings (⚙ button) with the “Minimize to tray” checkbox.
-- Appearance: “system”, light, dark and “hacker” themes (muted green). The ⚙ button in the header opens the settings: theme, “Minimize to tray”, “Service messages” and the “Rendering” line showing what draws the window; with software rendering a warning is displayed there as well.
+- Appearance: “system”, light, dark and “Matrix” themes (muted green). The ⚙ button in the header opens the settings: the RU|EN language switch and the theme selector in the top row, “Minimize to tray”, “Service messages” and the renderer name line; with software rendering a warning is displayed there as well.
+- Interface language: Russian or English, the RU|EN switch in the settings next to the theme selector. On the first run the language comes from the Windows locale (Russian locale — Russian, otherwise English) and is remembered in `pglistener.db`. Until a language has been chosen, it can be set with the `PGLISTENER_LANG=ru` or `PGLISTENER_LANG=en` environment variable. Already received messages are not retranslated, neither are connection, folder and channel names.
 - On startup the application asks whether to restore the connections that were active when it was closed.
 - Connection passwords can be encrypted with a master password (see “Security”).
 - Portable mode: settings are stored in `pglistener.db` (SQLite), logs in `logs\`, both next to the exe.
@@ -154,7 +155,7 @@ The window is rendered with OpenGL. If OpenGL is unavailable (RDP, a virtual mac
 
 With a GPU, both methods use the same amount of CPU, but OpenGL takes three times less memory (about 30–40 MB versus 110 MB).
 
-The active renderer is shown in the settings (⚙ button, “Rendering” line); with software rendering a warning is displayed there too. The renderer can be forced with the `PGLISTENER_RENDERER=opengl` or `PGLISTENER_RENDERER=dx12` environment variable.
+The active renderer is shown in the settings (⚙ button, the renderer name line); with software rendering a warning is displayed there too. The renderer can be forced with the `PGLISTENER_RENDERER=opengl` or `PGLISTENER_RENDERER=dx12` environment variable.
 
 ## Source layout
 
@@ -162,6 +163,7 @@ The active renderer is shown in the settings (⚙ button, “Rendering” line);
 |---|---|
 | `src/main.rs` | startup, renderer selection |
 | `src/app.rs` | UI: connection tree, log, filters, search, themes, dialogs |
+| `src/i18n.rs` | UI strings in Russian and English, language selection |
 | `src/worker.rs` | SSH tunnel, PostgreSQL connection, LISTEN/UNLISTEN, reconnecting |
 | `src/bridge.rs` | bridge: accepting network connections and forwarding them to the database |
 | `src/logfile.rs` | writing logs with daily rotation, reading the current day's lines |

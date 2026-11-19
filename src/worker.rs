@@ -14,6 +14,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio_postgres::tls::MakeTlsConnect;
 use tokio_postgres::AsyncMessage;
+use crate::i18n::{Key, t, tf};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const PING_INTERVAL: Duration = Duration::from_secs(30);
@@ -138,9 +139,7 @@ impl Worker {
             let delay = BACKOFF[attempt.min(BACKOFF.len() - 1)];
             attempt += 1;
             let reason = format!("{err:#}");
-            self.system(format!(
-                "Ошибка: {reason}. Повторное подключение через {delay} с"
-            ));
+            self.system(tf(Key::ReconnectError, &[&reason, &delay.to_string()]));
             self.status(ConnStatus::Reconnecting(reason));
             let sleep = tokio::time::sleep(Duration::from_secs(delay));
             tokio::pin!(sleep);
@@ -154,7 +153,7 @@ impl Worker {
                 break;
             }
         }
-        self.system("Отключено");
+        self.system(t(Key::DisconnectedMsg));
         self.status(ConnStatus::Disconnected);
     }
 
@@ -163,7 +162,7 @@ impl Worker {
         if cfg.ssh.enabled {
             let (handle, stream) = tokio::time::timeout(CONNECT_TIMEOUT, ssh_tunnel(&cfg))
                 .await
-                .map_err(|_| anyhow!("таймаут подключения к SSH-серверу"))??;
+                .map_err(|_| anyhow!(t(Key::SshConnectTimeout)))??;
             let r = self.pg_session(stream, cmds).await;
             let _ = handle
                 .disconnect(russh::Disconnect::ByApplication, "", "")
@@ -175,8 +174,8 @@ impl Worker {
                 tokio::net::TcpStream::connect((cfg.host.as_str(), cfg.port)),
             )
             .await
-            .map_err(|_| anyhow!("таймаут подключения к {}:{}", cfg.host, cfg.port))?
-            .with_context(|| format!("подключение к {}:{}", cfg.host, cfg.port))?;
+            .map_err(|_| anyhow!(tf(Key::ConnectTimeoutAddr, &[&cfg.host, &cfg.port.to_string()])))?
+            .with_context(|| tf(Key::ConnectingTo, &[&cfg.host, &cfg.port.to_string()]))?;
             let _ = stream.set_nodelay(true);
             self.pg_session(stream, cmds).await
         }
@@ -201,21 +200,25 @@ impl Worker {
                 .with_context(|| format!("LISTEN {ch}"))?;
         }
         let list: Vec<&str> = self.channels.iter().map(String::as_str).collect();
-        self.system(format!(
-            "Подключено к {}:{}/{}{}. Каналы: {}",
-            self.cfg.host,
-            self.cfg.port,
-            self.cfg.dbname,
-            if self.cfg.ssh.enabled {
-                format!(" через SSH {}", self.cfg.ssh.host)
-            } else {
-                String::new()
-            },
-            if list.is_empty() {
-                "(нет)".to_string()
-            } else {
-                list.join(", ")
-            }
+        let via = if self.cfg.ssh.enabled {
+            tf(Key::SshVia, &[&self.cfg.ssh.host])
+        } else {
+            String::new()
+        };
+        let channels = if list.is_empty() {
+            t(Key::NoneChannels).to_string()
+        } else {
+            list.join(", ")
+        };
+        self.system(tf(
+            Key::ConnectedTo,
+            &[
+                &self.cfg.host,
+                &self.cfg.port.to_string(),
+                &self.cfg.dbname,
+                &via,
+                &channels,
+            ],
         ));
         self.status(ConnStatus::Connected);
 
@@ -230,21 +233,21 @@ impl Worker {
                         text: n.payload().to_string(),
                     }),
                     Some(Err(e)) => return Err(e.into()),
-                    None => bail!("соединение закрыто сервером"),
+                    None => bail!(t(Key::ConnectionClosedByServer)),
                 },
                 cmd = cmds.recv() => match cmd {
                     Some(Cmd::Listen(ch)) => {
                         if self.channels.insert(ch.clone()) {
                             self.send_history(&ch);
                             client.batch_execute(&format!("LISTEN {}", quote_ident(&ch))).await?;
-                            self.system(format!("Добавлен канал {ch}"));
+                            self.system(tf(Key::ChannelAdded, &[&ch]));
                         }
                     }
                     Some(Cmd::Unlisten(ch)) => {
                         if self.channels.remove(&ch) {
                             client.batch_execute(&format!("UNLISTEN {}", quote_ident(&ch))).await?;
                             self.log.close(&ch);
-                            self.system(format!("Удалён канал {ch}"));
+                            self.system(tf(Key::ChannelRemoved, &[&ch]));
                         }
                     }
                     Some(Cmd::Log(text)) => self.system(text),
@@ -253,7 +256,7 @@ impl Worker {
                 _ = ping.tick() => {
                     tokio::time::timeout(PING_TIMEOUT, client.simple_query("SELECT 1"))
                         .await
-                        .map_err(|_| anyhow!("сервер не отвечает"))??;
+                        .map_err(|_| anyhow!(t(Key::ServerNotResponding)))??;
                 }
             }
         }
@@ -293,7 +296,7 @@ where
     let connector = MakeTlsConnect::<S>::make_tls_connect(&mut make, &cfg.host)?;
     let (client, mut connection) = tokio::time::timeout(CONNECT_TIMEOUT, pg.connect_raw(stream, connector))
         .await
-        .map_err(|_| anyhow!("таймаут подключения к PostgreSQL"))??;
+        .map_err(|_| anyhow!(t(Key::PgConnectTimeout)))??;
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     let task = tokio::spawn(async move {
@@ -357,7 +360,7 @@ pub async fn ssh_forward(
     let channel = handle
         .channel_open_direct_tcpip(cfg.host.clone(), cfg.port as u32, origin, origin_port as u32)
         .await
-        .with_context(|| format!("SSH-туннель до {}:{}", cfg.host, cfg.port))?;
+        .with_context(|| tf(Key::SshTunnelTo, &[&cfg.host, &cfg.port.to_string()]))?;
     Ok(channel.into_stream())
 }
 
@@ -372,7 +375,7 @@ pub async fn ssh_connect(cfg: &ConnConfig) -> Result<SshHandle> {
     });
     let mut handle = russh::client::connect(config, (s.host.as_str(), s.port), SshClient)
         .await
-        .with_context(|| format!("подключение к SSH {}:{}", s.host, s.port))?;
+        .with_context(|| tf(Key::ConnectingSsh, &[&s.host, &s.port.to_string()]))?;
 
     let ok = match s.auth {
         SshAuth::Password => {
@@ -382,7 +385,7 @@ pub async fn ssh_connect(cfg: &ConnConfig) -> Result<SshHandle> {
         SshAuth::Key => {
             let pass = (!s.key_passphrase.is_empty()).then_some(s.key_passphrase.as_str());
             let key = russh::keys::load_secret_key(resolve_path(&s.key_path), pass)
-                .with_context(|| format!("чтение ключа {}", s.key_path))?;
+                .with_context(|| tf(Key::ReadingKey, &[&s.key_path]))?;
             let hash = handle.best_supported_rsa_hash().await?.flatten();
             handle
                 .authenticate_publickey(
@@ -394,7 +397,7 @@ pub async fn ssh_connect(cfg: &ConnConfig) -> Result<SshHandle> {
         }
     };
     if !ok {
-        bail!("SSH: аутентификация не удалась");
+        bail!(t(Key::SshAuthFailed));
     }
     Ok(handle)
 }
@@ -458,7 +461,7 @@ pub fn test(rt: &tokio::runtime::Handle, cfg: ConnConfig, events: EventSink) {
     rt.spawn(async move {
         let r = tokio::time::timeout(Duration::from_secs(30), test_inner(cfg))
             .await
-            .unwrap_or_else(|_| Err(anyhow!("таймаут")));
+            .unwrap_or_else(|_| Err(anyhow!(t(Key::Timeout))));
         events.send(Event::TestResult(r.map_err(|e| format!("{e:#}"))));
     });
 }
@@ -483,7 +486,7 @@ async fn test_inner(cfg: ConnConfig) -> Result<String> {
     } else {
         let stream = tokio::net::TcpStream::connect((cfg.host.as_str(), cfg.port))
             .await
-            .with_context(|| format!("подключение к {}:{}", cfg.host, cfg.port))?;
+            .with_context(|| tf(Key::ConnectingTo, &[&cfg.host, &cfg.port.to_string()]))?;
         query(&cfg, stream).await
     }
 }

@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{mpsc, Arc, Mutex};
 use tokio::sync::mpsc::UnboundedSender;
+use crate::i18n::{self, Key, Lang, t, tf};
 
 const GREEN: Color32 = Color32::from_rgb(60, 180, 75);
 const ORANGE: Color32 = Color32::from_rgb(230, 150, 30);
@@ -59,7 +60,7 @@ impl RenderInfo {
             };
         }
         Self {
-            text: "неизвестно".into(),
+            text: t(Key::Unknown).into(),
             software: false,
         }
     }
@@ -93,21 +94,21 @@ impl UiTheme {
             .unwrap_or(UiTheme::System)
     }
 
-    fn icon(self) -> RichText {
+    fn icon(self) -> &'static str {
         match self {
-            UiTheme::System => RichText::new("💻"),
-            UiTheme::Light => RichText::new("☀"),
-            UiTheme::Dark => RichText::new("🌙"),
-            UiTheme::Hacker => RichText::new(">_").monospace().strong(),
+            UiTheme::System => "💻",
+            UiTheme::Light => "☀",
+            UiTheme::Dark => "🌙",
+            UiTheme::Hacker => ">_",
         }
     }
 
     fn label(self) -> &'static str {
         match self {
-            UiTheme::System => "Как в системе",
-            UiTheme::Light => "Светлая",
-            UiTheme::Dark => "Тёмная",
-            UiTheme::Hacker => "Хакерская",
+            UiTheme::System => t(Key::SystemTheme),
+            UiTheme::Light => t(Key::LightTheme),
+            UiTheme::Dark => t(Key::DarkTheme),
+            UiTheme::Hacker => t(Key::HackerTheme),
         }
     }
 
@@ -697,6 +698,8 @@ pub struct App {
     tray: Option<Tray>,
     minimize_to_tray: bool,
     theme: UiTheme,
+    /// Язык интерфейса и служебных сообщений воркера и моста.
+    lang: Lang,
     /// Показывать служебные сообщения приложения в логе.
     show_system: bool,
     /// Чем рисуется окно: рендерер и видеокарта; `software` — без видеокарты.
@@ -780,6 +783,7 @@ impl egui::Plugin for SelectionWatch {
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, rt: tokio::runtime::Runtime, storage: Storage) -> Self {
         let (tx, rx) = mpsc::channel();
+        let lang = init_language(&storage);
         let mut app = Self {
             rt,
             storage,
@@ -798,6 +802,7 @@ impl App {
             tray: Tray::new(&cc.egui_ctx),
             minimize_to_tray: true,
             theme: UiTheme::System,
+            lang,
             show_system: true,
             render: RenderInfo::detect(cc),
             esc: false,
@@ -829,7 +834,9 @@ impl App {
                 self.folders = f;
                 self.conns = c;
             }
-            (Err(e), _) | (_, Err(e)) => self.error = Some(format!("Ошибка чтения базы: {e:#}")),
+            (Err(e), _) | (_, Err(e)) => {
+                self.error = Some(tf(Key::DbReadError, &[&format!("{e:#}")]))
+            }
         }
     }
 
@@ -841,6 +848,20 @@ impl App {
                 None
             }
         }
+    }
+
+    /// Переключает язык всего приложения: подписи, служебные сообщения, меню трея.
+    fn set_language(&mut self, lang: Lang, ctx: &egui::Context) {
+        if self.lang == lang {
+            return;
+        }
+        self.lang = lang;
+        i18n::set_current(lang);
+        let r = self.storage.set_setting("language", lang.code());
+        self.report(r);
+        // Меню трея собирается один раз, поэтому пересоздаём его с новыми подписями.
+        self.tray = Tray::new(ctx);
+        ctx.request_repaint();
     }
 
     fn conn(&self, id: i64) -> Option<&ConnConfig> {
@@ -1008,7 +1029,7 @@ impl App {
                     let mut cfg = c.clone();
                     cfg.id = 0;
                     cfg.active = false;
-                    cfg.name = format!("{} (копия)", cfg.name);
+                    cfg.name = tf(Key::DupSuffix, &[&cfg.name]);
                     // Порт моста занят оригиналом, поэтому в копии мост выключен.
                     cfg.bridge.enabled = false;
                     self.dialog = Some(Dialog::Conn(ConnDialog::new(cfg)));
@@ -1088,8 +1109,8 @@ impl App {
     }
 
     fn move_menu(&self, ui: &mut egui::Ui, target: Target, actions: &mut Vec<Action>) {
-        ui.menu_button("Переместить в", |ui| {
-            if ui.button("(корень)").clicked() {
+        ui.menu_button(t(Key::MoveTo), |ui| {
+            if ui.button(t(Key::RootFolder)).clicked() {
                 actions.push(Action::Move(target, None));
             }
             let mut list: Vec<(String, i64)> = self
@@ -1120,18 +1141,18 @@ impl App {
                 .default_open(true)
                 .show(ui, |ui| self.tree(ui, Some(f.id), actions, depth + 1));
             r.header_response.context_menu(|ui| {
-                if ui.button("Новое подключение…").clicked() {
+                if ui.button(t(Key::NewConnectionMenu)).clicked() {
                     actions.push(Action::NewConn(Some(f.id)));
                 }
-                if ui.button("Новая папка…").clicked() {
+                if ui.button(t(Key::NewFolderMenu)).clicked() {
                     actions.push(Action::NewFolder(Some(f.id)));
                 }
-                if ui.button("Переименовать…").clicked() {
+                if ui.button(t(Key::Rename)).clicked() {
                     actions.push(Action::RenameFolder(f.id));
                 }
                 self.move_menu(ui, Target::Folder(f.id), actions);
                 ui.separator();
-                if ui.button("Удалить папку").clicked() {
+                if ui.button(t(Key::DeleteFolder)).clicked() {
                     actions.push(Action::Delete(Target::Folder(f.id)));
                 }
             });
@@ -1158,21 +1179,21 @@ impl App {
             }
             r.context_menu(|ui| {
                 if connected {
-                    if ui.button("Отключить").clicked() {
+                    if ui.button(t(Key::Disconnect)).clicked() {
                         actions.push(Action::Disconnect(c.id));
                     }
-                } else if ui.button("Подключить").clicked() {
+                } else if ui.button(t(Key::Connect)).clicked() {
                     actions.push(Action::Connect(c.id));
                 }
-                if ui.button("Свойства…").clicked() {
+                if ui.button(t(Key::PropertiesMenu)).clicked() {
                     actions.push(Action::Edit(c.id));
                 }
-                if ui.button("Дублировать…").clicked() {
+                if ui.button(t(Key::Duplicate)).clicked() {
                     actions.push(Action::Duplicate(c.id));
                 }
                 self.move_menu(ui, Target::Conn(c.id), actions);
                 ui.separator();
-                if ui.button("Удалить").clicked() {
+                if ui.button(t(Key::Delete)).clicked() {
                     actions.push(Action::Delete(Target::Conn(c.id)));
                 }
             });
@@ -1181,15 +1202,15 @@ impl App {
 
     fn left_buttons(&self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
         ui.horizontal(|ui| {
-            if ui.button("➕ Подключение").clicked() {
+            if ui.button(t(Key::NewConnectionBtn)).clicked() {
                 actions.push(Action::NewConn(None));
             }
-            if ui.button("📁 Папка").clicked() {
+            if ui.button(t(Key::FolderBtn)).clicked() {
                 actions.push(Action::NewFolder(None));
             }
             let (icon, hint) = match self.storage.lock_state() {
-                Lock::NoPassword => ("🔓", "Пароли хранятся открытым текстом. Задать мастер-пароль"),
-                _ => ("🔒", "Пароли зашифрованы мастер-паролем"),
+                Lock::NoPassword => ("🔓", t(Key::PasswordsPlainSetMaster)),
+                _ => ("🔒", t(Key::PasswordsEncrypted)),
             };
             if ui.button(icon).on_hover_text(hint).clicked() {
                 actions.push(Action::Master);
@@ -1201,7 +1222,7 @@ impl App {
     fn settings_button(&mut self, ui: &mut egui::Ui) {
         let resp = ui
             .add(egui::Button::new(RichText::new("⚙").size(17.0)).frame(false))
-            .on_hover_text("Настройки");
+            .on_hover_text(t(Key::Settings));
         egui::Popup::from_toggle_button_response(&resp)
             .align(egui::RectAlign::BOTTOM_END)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
@@ -1210,39 +1231,43 @@ impl App {
 
     fn settings_popup(&mut self, ui: &mut egui::Ui) {
         let mut theme = self.theme;
+        let mut lang = self.lang;
         let mut tray = self.minimize_to_tray;
         let mut system = self.show_system;
-        ui.set_width(300.0);
-        setting_row(ui, "Тема", |ui| {
-            let options = UiTheme::ALL.map(|t| (t, t.icon(), t.label()));
-            segmented(ui, &mut theme, &options);
-        });
+        ui.set_width(262.0);
+        // Язык и тема — без подписи: пиктограммы селекторов говорят сами за себя.
+        interface_row(ui, &mut theme, &mut lang);
         if self.tray.is_some() {
-            setting_row(ui, "Сворачивать в трей", |ui| {
+            setting_row(ui, t(Key::MinimizeToTray), |ui| {
                 toggle_switch(ui, &mut tray);
             });
         }
-        setting_row(ui, "Системные сообщения", |ui| {
+        setting_row(ui, t(Key::SystemMessages), |ui| {
             toggle_switch(ui, &mut system)
-                .on_hover_text("Сообщения самого PgListener (подключение, ошибки) в окне лога");
+                .on_hover_text(t(Key::SystemMessagesHint));
         });
         ui.separator();
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
-            ui.label(RichText::new("Отрисовка:").small().weak());
-            ui.label(RichText::new(&self.render.text).small().weak());
-        })
-        .response
-        .on_hover_text(
-            "OpenGL используется, если он есть; иначе DirectX 12. \
-             Принудительно: переменная окружения PGLISTENER_RENDERER=opengl или dx12.",
-        );
+        // Строка без подписи: и так понятно, что здесь показано имя рендерера.
+        // Имя бывает длинным (например, «NVIDIA GeForce RTX 5070 Ti/PCIe/SSE2»),
+        // поэтому текст переносится по ширине поп-апа, а не уезжает за край.
+        ui.add(
+            egui::Label::new(RichText::new(&self.render.text).small().weak())
+                .wrap_mode(egui::TextWrapMode::Wrap),
+        )
+        .on_hover_text(t(Key::RendererHint));
         if self.render.software {
-            ui.label(
-                RichText::new("Видеокарта не используется: окно рисует процессор, это заметно его нагружает.")
-                    .small()
-                    .color(ui.visuals().warn_fg_color),
+            ui.add(
+                egui::Label::new(
+                    RichText::new(t(Key::SoftwareRenderWarning))
+                        .small()
+                        .color(ui.visuals().warn_fg_color),
+                )
+                .wrap_mode(egui::TextWrapMode::Wrap),
             );
+        }
+        if lang != self.lang {
+            let ctx = ui.ctx().clone();
+            self.set_language(lang, &ctx);
         }
         if theme != self.theme {
             self.theme = theme;
@@ -1271,10 +1296,10 @@ impl App {
                 ui.allocate_response(ui.available_size(), egui::Sense::click())
             });
         r.inner.context_menu(|ui| {
-            if ui.button("Новое подключение…").clicked() {
+            if ui.button(t(Key::NewConnectionMenu)).clicked() {
                 actions.push(Action::NewConn(None));
             }
-            if ui.button("Новая папка…").clicked() {
+            if ui.button(t(Key::NewFolderMenu)).clicked() {
                 actions.push(Action::NewFolder(None));
             }
         });
@@ -1330,8 +1355,11 @@ impl App {
                 ui.label(RichText::new(hint).color(color));
                 if cfg.bridge.enabled && *status != ConnStatus::Disconnected {
                     ui.label(
-                        RichText::new(format!("· мост {}:{}", cfg.bridge.listen, cfg.bridge.port))
-                            .color(GRAY),
+                        RichText::new(tf(
+                            Key::BridgeConn,
+                            &[&cfg.bridge.listen, &cfg.bridge.port.to_string()],
+                        ))
+                        .color(GRAY),
                     );
                 }
             }
@@ -1344,18 +1372,18 @@ impl App {
         };
         ui.horizontal(|ui| {
             if status == ConnStatus::Disconnected {
-                if ui.button("▶ Подключить").clicked() {
+                if ui.button(t(Key::ConnectBtn)).clicked() {
                     self.connect(id);
                 }
-            } else if ui.button("⏹ Отключить").clicked() {
+            } else if ui.button(t(Key::DisconnectBtn)).clicked() {
                 self.disconnect(id);
             }
-            if ui.button("⚙ Свойства").clicked() {
+            if ui.button(t(Key::PropertiesBtn)).clicked() {
                 self.apply(Action::Edit(id));
             }
             let dir = Self::log_dir(&cfg);
             if ui
-                .button("📂 Папка логов")
+                .button(t(Key::LogFolderBtn))
                 .on_hover_text(dir.display().to_string())
                 .clicked()
             {
@@ -1363,8 +1391,8 @@ impl App {
                 open_folder(&dir);
             }
             if ui
-                .button("🗑 Очистить окно")
-                .on_hover_text("Очищает только окно; файлы логов не трогаются")
+                .button(t(Key::ClearWindowBtn))
+                .on_hover_text(t(Key::ClearWindowHint))
                 .clicked()
             {
                 let v = self.views.entry(id).or_default();
@@ -1391,8 +1419,8 @@ impl App {
             let view = self.views.entry(id).or_default();
             ui.horizontal_wrapped(|ui| {
                 if ui
-                    .selectable_label(view.hidden.is_empty(), "Все")
-                    .on_hover_text("Показывать все каналы")
+                    .selectable_label(view.hidden.is_empty(), t(Key::All))
+                    .on_hover_text(t(Key::ShowAllChannels))
                     .clicked()
                 {
                     view.show_all_channels();
@@ -1408,7 +1436,7 @@ impl App {
                 }
                 let r = ui.add(
                     egui::TextEdit::singleline(&mut view.channel_input)
-                        .hint_text("новый канал")
+                        .hint_text(t(Key::NewChannelHint))
                         .desired_width(140.0),
                 );
                 if enter_pressed(ui, &r) && !view.channel_input.trim().is_empty() {
@@ -1429,7 +1457,7 @@ impl App {
     fn central(&mut self, ui: &mut egui::Ui) {
         let Some((id, cfg)) = self.selected_conn() else {
             ui.centered_and_justified(|ui| {
-                ui.label("Создайте подключение кнопкой «➕ Подключение» слева");
+                ui.label(t(Key::EmptyStateHint));
             });
             return;
         };
@@ -1437,7 +1465,7 @@ impl App {
         // Фильтры и поиск: подписи слева, за вертикальной чертой — поля и применённые значения.
         let mut filters = cfg.filters.clone();
         let mut includes = cfg.includes.clone();
-        let labels = ["Показывать вхождения", "Скрывать вхождения", "Поиск"];
+        let labels = [t(Key::IncludeLabel), t(Key::HideLabel), t(Key::SearchLabel)];
         let label_w = labels
             .iter()
             .map(|l| {
@@ -1454,14 +1482,14 @@ impl App {
                 ui,
                 label_w,
                 labels[0],
-                "Если задано, показываются только строки, содержащие любую из подстрок. Регистр не учитывается.",
+                t(Key::IncludesHint),
                 |ui| filter_items(ui, &mut includes, &mut view.include_input),
             );
             let b = labeled_row(
                 ui,
                 label_w,
                 labels[1],
-                "Строки, содержащие любую из подстрок, не показываются. Регистр не учитывается.",
+                t(Key::ExcludesHint),
                 |ui| filter_items(ui, &mut filters, &mut view.filter_input),
             );
             a || b
@@ -1503,7 +1531,7 @@ impl App {
             ui,
             label_w,
             labels[2],
-            "Enter закрепляет запрос, у каждого запроса свой цвет. Enter в пустом поле — следующее совпадение.",
+            t(Key::SearchHint),
             |ui| search_items(ui, search, pal, rows, visible),
         );
         // Вертикальная черта между подписями и полями.
@@ -1528,17 +1556,12 @@ impl App {
             .unwrap_or(0)
             .max(6);
         let counter = if total >= MAX_ROWS {
-            format!(
-                "Строк в окне: {} (хранятся последние), показано: {}",
-                fmt_count(total),
-                visible.len()
+            tf(
+                Key::CounterLimited,
+                &[&fmt_count(total), &visible.len().to_string()],
             )
         } else {
-            format!(
-                "Строк в окне: {}, показано: {}",
-                fmt_count(total),
-                visible.len()
-            )
+            tf(Key::Counter, &[&fmt_count(total), &visible.len().to_string()])
         };
         // Слежение за концом: галочка показывает состояние, а не только позицию у низа.
         let mut jump_to_end = false;
@@ -1685,10 +1708,10 @@ impl App {
                                     .sense(egui::Sense::click()),
                             );
                             r.context_menu(|ui| {
-                                if ui.button("Копировать строку").clicked() {
+                                if ui.button(t(Key::CopyLine)).clicked() {
                                     copy = Some(format_entry(&rows[i].entry));
                                 }
-                                if ui.button("Копировать все показанные строки").clicked() {
+                                if ui.button(t(Key::CopyAllShown)).clicked() {
                                     copy = Some(
                                         visible
                                             .iter()
@@ -1743,52 +1766,52 @@ impl App {
         let state = self.storage.lock_state();
         let mut keep = true;
         let mut action: Option<Option<String>> = None;
-        egui::Window::new("Мастер-пароль")
+        egui::Window::new(t(Key::MasterPassword))
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 ui.label(match state {
-                    Lock::NoPassword => "Сейчас пароли подключений хранятся в pglistener.db открытым текстом.",
-                    _ => "Пароли подключений зашифрованы (AES-256-GCM, ключ из мастер-пароля через Argon2).",
+                    Lock::NoPassword => t(Key::PasswordsPlainInfo),
+                    _ => t(Key::StoreEncryptedScheme),
                 });
                 ui.add_space(6.0);
                 egui::Grid::new("master_grid").num_columns(2).show(ui, |ui| {
-                    ui.label(if state == Lock::NoPassword { "Мастер-пароль" } else { "Новый пароль" });
+                    ui.label(if state == Lock::NoPassword { t(Key::MasterPassword) } else { t(Key::NewPassword) });
                     ui.add(egui::TextEdit::singleline(&mut d.new).password(true).desired_width(220.0));
                     ui.end_row();
-                    ui.label("Повтор");
+                    ui.label(t(Key::Retry));
                     ui.add(egui::TextEdit::singleline(&mut d.repeat).password(true).desired_width(220.0));
                     ui.end_row();
                 });
                 if cfg!(windows) {
-                    ui.checkbox(&mut d.remember, "Запомнить на этом компьютере")
-                        .on_hover_text("Пароль не будет спрашиваться при запуске под вашей учётной записью Windows. На другом компьютере его придётся ввести.");
+                    ui.checkbox(&mut d.remember, t(Key::RememberOnPC))
+                        .on_hover_text(t(Key::RememberHint));
                 }
                 if let Some(e) = &d.error {
                     ui.label(RichText::new(e).color(Color32::from_rgb(220, 60, 60)));
                 }
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    if ui.button(if state == Lock::NoPassword { "Задать" } else { "Сменить" }).clicked() {
+                    if ui.button(if state == Lock::NoPassword { t(Key::Set) } else { t(Key::Change) }).clicked() {
                         if d.new.is_empty() {
-                            d.error = Some("Введите пароль".into());
+                            d.error = Some(t(Key::EnterPassword).into());
                         } else if d.new != d.repeat {
-                            d.error = Some("Пароли не совпадают".into());
+                            d.error = Some(t(Key::PasswordsMismatch).into());
                         } else {
                             action = Some(Some(d.new.clone()));
                         }
                     }
                     if state != Lock::NoPassword {
-                        if ui.button("Снять пароль").on_hover_text("Пароли снова будут храниться открытым текстом").clicked() {
+                        if ui.button(t(Key::RemovePassword)).on_hover_text(t(Key::PasswordsPlainAgain)).clicked() {
                             action = Some(None);
                         }
-                        if cfg!(windows) && d.remember != self.storage.is_remembered() && ui.button("Применить «запомнить»").clicked() {
+                        if cfg!(windows) && d.remember != self.storage.is_remembered() && ui.button(t(Key::ApplyRemember)).clicked() {
                             let r = if d.remember { self.storage.remember() } else { self.storage.forget() };
                             self.report(r);
                         }
                     }
-                    if ui.button("Отмена").clicked() {
+                    if ui.button(t(Key::Cancel)).clicked() {
                         keep = false;
                     }
                 });
@@ -1811,8 +1834,8 @@ impl App {
         let mut submit = false;
         let mut reset = false;
         egui::Modal::new(egui::Id::unique("unlock_modal")).show(ctx, |ui| {
-            ui.heading("Введите мастер-пароль");
-            ui.label("Пароли подключений в pglistener.db зашифрованы.");
+            ui.heading(t(Key::EnterMasterPassword));
+            ui.label(t(Key::StoreEncryptedInfo));
             ui.add_space(6.0);
             let r = ui.add(egui::TextEdit::singleline(&mut p.password).password(true).desired_width(260.0));
             if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
@@ -1821,28 +1844,28 @@ impl App {
                 r.request_focus();
             }
             if cfg!(windows) {
-                ui.checkbox(&mut p.remember, "Запомнить на этом компьютере");
+                ui.checkbox(&mut p.remember, t(Key::RememberOnPC));
             }
             if p.error {
-                ui.label(RichText::new("Неверный пароль").color(Color32::from_rgb(220, 60, 60)));
+                ui.label(RichText::new(t(Key::WrongPassword)).color(Color32::from_rgb(220, 60, 60)));
             }
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                if ui.button("Открыть").clicked() {
+                if ui.button(t(Key::Open)).clicked() {
                     submit = true;
                 }
-                if ui.button("Забыл пароль…").clicked() {
+                if ui.button(t(Key::ForgotPassword)).clicked() {
                     p.confirm_reset = true;
                 }
             });
             if p.confirm_reset {
                 ui.separator();
-                ui.label("Все сохранённые пароли подключений будут стёрты, остальные настройки сохранятся. Продолжить?");
+                ui.label(t(Key::ClearPasswordsConfirm));
                 ui.horizontal(|ui| {
-                    if ui.button("Стереть пароли").clicked() {
+                    if ui.button(t(Key::ErasePasswords)).clicked() {
                         reset = true;
                     }
-                    if ui.button("Отмена").clicked() {
+                    if ui.button(t(Key::Cancel)).clicked() {
                         p.confirm_reset = false;
                     }
                 });
@@ -1879,7 +1902,7 @@ impl App {
     fn conn_dialog(&mut self, ctx: &egui::Context, mut d: Box<ConnDialog>) -> Option<Dialog> {
         let mut keep = true;
         let mut save = false;
-        let title = if d.cfg.id == 0 { "Новое подключение" } else { "Свойства подключения" };
+        let title = if d.cfg.id == 0 { t(Key::NewConnection) } else { t(Key::ConnectionProperties) };
         egui::Window::new(title)
             .collapsible(false)
             .resizable(false)
@@ -1890,23 +1913,23 @@ impl App {
                     .num_columns(2)
                     .spacing([12.0, 6.0])
                     .show(ui, |ui| {
-                        ui.label("Имя");
+                        ui.label(t(Key::Name));
                         ui.add(egui::TextEdit::singleline(&mut c.name).desired_width(300.0));
                         ui.end_row();
-                        ui.label("Хост");
+                        ui.label(t(Key::Host));
                         ui.add(egui::TextEdit::singleline(&mut c.host).desired_width(300.0))
-                            .on_hover_text("При SSH-туннеле — адрес сервера БД со стороны SSH-сервера (обычно localhost)");
+                            .on_hover_text(t(Key::SshHostHint));
                         ui.end_row();
-                        ui.label("Порт");
+                        ui.label(t(Key::Port));
                         ui.add(egui::DragValue::new(&mut c.port).range(1..=65535));
                         ui.end_row();
-                        ui.label("База данных");
+                        ui.label(t(Key::Database));
                         ui.add(egui::TextEdit::singleline(&mut c.dbname).desired_width(300.0));
                         ui.end_row();
-                        ui.label("Пользователь");
+                        ui.label(t(Key::User));
                         ui.add(egui::TextEdit::singleline(&mut c.user).desired_width(300.0));
                         ui.end_row();
-                        ui.label("Пароль");
+                        ui.label(t(Key::Password));
                         ui.add(
                             egui::TextEdit::singleline(&mut c.password)
                                 .password(true)
@@ -1915,14 +1938,14 @@ impl App {
                         ui.end_row();
                         ui.label("SSL");
                         egui::ComboBox::from_id_salt("sslmode")
-                            .selected_text(c.sslmode.as_str())
+                            .selected_text(ssl_label(c.sslmode))
                             .show_ui(ui, |ui| {
                                 for m in SslMode::ALL {
-                                    ui.selectable_value(&mut c.sslmode, m, m.as_str());
+                                    ui.selectable_value(&mut c.sslmode, m, ssl_label(m));
                                 }
                             });
                         ui.end_row();
-                        ui.label("Каталог логов");
+                        ui.label(t(Key::LogDir));
                         ui.vertical(|ui| {
                             ui.add(
                                 egui::TextEdit::singleline(&mut c.log_dir)
@@ -1939,31 +1962,31 @@ impl App {
                     });
 
                 ui.add_space(6.0);
-                ui.checkbox(&mut c.ssh.enabled, "Подключаться через SSH-туннель");
+                ui.checkbox(&mut c.ssh.enabled, t(Key::SshToggle));
                 if c.ssh.enabled {
                     egui::Grid::new("ssh_grid")
                         .num_columns(2)
                         .spacing([12.0, 6.0])
                         .show(ui, |ui| {
                             let s = &mut c.ssh;
-                            ui.label("SSH-хост");
+                            ui.label(t(Key::SshHost));
                             ui.add(egui::TextEdit::singleline(&mut s.host).desired_width(300.0));
                             ui.end_row();
-                            ui.label("SSH-порт");
+                            ui.label(t(Key::SshPort));
                             ui.add(egui::DragValue::new(&mut s.port).range(1..=65535));
                             ui.end_row();
-                            ui.label("SSH-пользователь");
+                            ui.label(t(Key::SshUser));
                             ui.add(egui::TextEdit::singleline(&mut s.user).desired_width(300.0));
                             ui.end_row();
-                            ui.label("Аутентификация");
+                            ui.label(t(Key::Authentication));
                             ui.horizontal(|ui| {
-                                ui.radio_value(&mut s.auth, SshAuth::Password, "Пароль");
-                                ui.radio_value(&mut s.auth, SshAuth::Key, "Ключ");
+                                ui.radio_value(&mut s.auth, SshAuth::Password, t(Key::Password));
+                                ui.radio_value(&mut s.auth, SshAuth::Key, t(Key::KeyField));
                             });
                             ui.end_row();
                             match s.auth {
                                 SshAuth::Password => {
-                                    ui.label("SSH-пароль");
+                                    ui.label(t(Key::SshPassword));
                                     ui.add(
                                         egui::TextEdit::singleline(&mut s.password)
                                             .password(true)
@@ -1972,25 +1995,25 @@ impl App {
                                     ui.end_row();
                                 }
                                 SshAuth::Key => {
-                                    ui.label("Файл ключа");
+                                    ui.label(t(Key::KeyFile));
                                     ui.horizontal(|ui| {
                                         ui.add(
                                             egui::TextEdit::singleline(&mut s.key_path)
-                                                .hint_text("OpenSSH/PEM, путь можно относительно exe")
+                                                .hint_text(t(Key::KeyFileHint))
                                                 .desired_width(230.0),
                                         );
-                                        if ui.button("Обзор…").clicked() {
+                                        if ui.button(t(Key::Browse)).clicked() {
                                             if let Some(p) = rfd::FileDialog::new().pick_file() {
                                                 s.key_path = p.display().to_string();
                                             }
                                         }
                                     });
                                     ui.end_row();
-                                    ui.label("Пароль ключа");
+                                    ui.label(t(Key::KeyPassword));
                                     ui.add(
                                         egui::TextEdit::singleline(&mut s.key_passphrase)
                                             .password(true)
-                                            .hint_text("если ключ зашифрован")
+                                            .hint_text(t(Key::IfKeyEncrypted))
                                             .desired_width(300.0),
                                     );
                                     ui.end_row();
@@ -2000,36 +2023,32 @@ impl App {
                 }
 
                 ui.add_space(6.0);
-                ui.checkbox(&mut c.bridge.enabled, "Мост: пускать к БД клиентов из локальной сети")
-                    .on_hover_text(
-                        "PgListener принимает подключения на указанном порту и пробрасывает их к БД \
-                         (через SSH-туннель, если он включён). Клиент указывает адрес этого ПК и порт \
-                         моста, а логин и пароль к БД вводит свой. Мост работает, пока подключение активно.",
-                    );
+                ui.checkbox(&mut c.bridge.enabled, t(Key::BridgeToggle))
+                    .on_hover_text(t(Key::BridgeHint));
                 if c.bridge.enabled {
                     egui::Grid::new("bridge_grid")
                         .num_columns(2)
                         .spacing([12.0, 6.0])
                         .show(ui, |ui| {
                             let b = &mut c.bridge;
-                            ui.label("Адрес");
+                            ui.label(t(Key::Address));
                             ui.add(
                                 egui::TextEdit::singleline(&mut b.listen)
                                     .hint_text("0.0.0.0")
                                     .desired_width(300.0),
                             )
-                            .on_hover_text("0.0.0.0 — все сетевые интерфейсы, 127.0.0.1 — только этот ПК");
+                            .on_hover_text(t(Key::BridgeListenHint));
                             ui.end_row();
-                            ui.label("Порт");
+                            ui.label(t(Key::Port));
                             ui.add(egui::DragValue::new(&mut b.port).range(1..=65535));
                             ui.end_row();
-                            ui.label("Разрешённые адреса");
+                            ui.label(t(Key::AllowedAddresses));
                             ui.add(
                                 egui::TextEdit::singleline(&mut d.allow_text)
-                                    .hint_text("пусто — все адреса")
+                                    .hint_text(t(Key::EmptyAllAddresses))
                                     .desired_width(300.0),
                             )
-                            .on_hover_text("Адреса и подсети через запятую, например: 192.168.1.0/24, 10.0.0.5");
+                            .on_hover_text(t(Key::BridgeAllowHint));
                             ui.end_row();
                         });
                 }
@@ -2039,11 +2058,11 @@ impl App {
 
                 ui.add_space(6.0);
                 ui.separator();
-                ui.label("Прослушиваемые каналы (изменения применяются сразу после сохранения, без переподключения):");
+                ui.label(t(Key::ChannelsHint));
                 ui.horizontal_wrapped(|ui| {
                     let r = ui.add(
                         egui::TextEdit::singleline(&mut d.new_channel)
-                            .hint_text("новый канал, Enter")
+                            .hint_text(t(Key::NewChannelEnter))
                             .desired_width(140.0),
                     );
                     if enter_pressed(ui, &r) && !d.new_channel.trim().is_empty() {
@@ -2056,7 +2075,7 @@ impl App {
                     }
                     let mut remove = None;
                     for (i, ch) in c.channels.iter().enumerate() {
-                        let (_, x) = x_chip(ui, ch, "", "Убрать канал", plain_chip_colors);
+                        let (_, x) = x_chip(ui, ch, "", t(Key::RemoveChannel), plain_chip_colors);
                         if x.clicked() {
                             remove = Some(i);
                         }
@@ -2071,7 +2090,7 @@ impl App {
                     _ if d.testing => {
                         ui.horizontal(|ui| {
                             ui.spinner();
-                            ui.label("Проверка подключения…");
+                            ui.label(t(Key::TestingConnection));
                         });
                     }
                     Some(Ok(v)) => {
@@ -2083,16 +2102,16 @@ impl App {
                     None => {}
                 }
                 ui.horizontal(|ui| {
-                    if ui.add_enabled(!d.testing, egui::Button::new("Проверить подключение")).clicked() {
+                    if ui.add_enabled(!d.testing, egui::Button::new(t(Key::TestConnection))).clicked() {
                         d.testing = true;
                         d.test = None;
                         worker::test(self.rt.handle(), d.cfg.clone(), self.sink.clone());
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Отмена").clicked() {
+                        if ui.button(t(Key::Cancel)).clicked() {
                             keep = false;
                         }
-                        if ui.button("Сохранить").clicked() {
+                        if ui.button(t(Key::Save)).clicked() {
                             save = true;
                         }
                     });
@@ -2110,7 +2129,7 @@ impl App {
                 d.cfg.bridge.listen = "0.0.0.0".into();
             }
             if let Err(e) = crate::bridge::parse_allow(&d.cfg.bridge.allow) {
-                d.error = Some(format!("Мост: {e}"));
+                d.error = Some(tf(Key::BridgeMsgErr, &[&e.to_string()]));
                 return Some(Dialog::Conn(d));
             }
             let cfg = d.cfg.clone();
@@ -2148,13 +2167,13 @@ impl App {
     fn folder_dialog(&mut self, ctx: &egui::Context, mut f: Folder) -> Option<Dialog> {
         let mut keep = true;
         let mut ok = false;
-        let title = if f.id == 0 { "Новая папка" } else { "Переименовать папку" };
+        let title = if f.id == 0 { t(Key::NewFolder) } else { t(Key::RenameFolder) };
         egui::Window::new(title)
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
-                let r = ui.add(egui::TextEdit::singleline(&mut f.name).hint_text("имя папки"));
+                let r = ui.add(egui::TextEdit::singleline(&mut f.name).hint_text(t(Key::FolderNameHint)));
                 if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     ok = true;
                 } else if ui.memory(|m| m.focused().is_none()) {
@@ -2164,7 +2183,7 @@ impl App {
                     if ui.button("OK").clicked() {
                         ok = true;
                     }
-                    if ui.button("Отмена").clicked() {
+                    if ui.button(t(Key::Cancel)).clicked() {
                         keep = false;
                     }
                 });
@@ -2183,15 +2202,12 @@ impl App {
         keep.then_some(Dialog::Folder(f))
     }
 
-    fn delete_dialog(&mut self, ctx: &egui::Context, t: Target) -> Option<Dialog> {
-        let text = match t {
-            Target::Folder(id) => format!(
-                "Удалить папку «{}»? Её содержимое переместится на уровень выше.",
-                self.folder_path(id)
-            ),
-            Target::Conn(id) => format!(
-                "Удалить подключение «{}»? Файлы логов останутся на диске.",
-                self.conn(id).map(|c| c.name.as_str()).unwrap_or("")
+    fn delete_dialog(&mut self, ctx: &egui::Context, target: Target) -> Option<Dialog> {
+        let text = match target {
+            Target::Folder(id) => tf(Key::DeleteFolderConfirm, &[&self.folder_path(id)]),
+            Target::Conn(id) => tf(
+                Key::DeleteConnectionConfirm,
+                &[self.conn(id).map(|c| c.name.as_str()).unwrap_or("")],
             ),
         };
         let mut result = None;
@@ -2199,10 +2215,10 @@ impl App {
             ui.label(text);
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui.button("Удалить").clicked() {
+                if ui.button(t(Key::Delete)).clicked() {
                     result = Some(true);
                 }
-                if ui.button("Отмена").clicked() {
+                if ui.button(t(Key::Cancel)).clicked() {
                     result = Some(false);
                 }
             });
@@ -2211,10 +2227,10 @@ impl App {
             result = Some(false);
         }
         match result {
-            None => Some(Dialog::Delete(t)),
+            None => Some(Dialog::Delete(target)),
             Some(false) => None,
             Some(true) => {
-                let r = match t {
+                let r = match target {
                     Target::Folder(id) => self.storage.delete_folder(id),
                     Target::Conn(id) => {
                         self.disconnect(id);
@@ -2243,17 +2259,17 @@ impl App {
             .collect();
         let mut result = None;
         egui::Modal::new(egui::Id::unique("restore_modal")).show(ctx, |ui| {
-            ui.heading("Восстановить подключения?");
-            ui.label("При прошлом закрытии были активны:");
+            ui.heading(t(Key::RestoreConnections));
+            ui.label(t(Key::RestoreActiveList));
             for n in &names {
                 ui.label(format!("  • {n}"));
             }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui.button("Да, подключить").clicked() {
+                if ui.button(t(Key::Yes)).clicked() {
                     result = Some(true);
                 }
-                if ui.button("Нет").clicked() {
+                if ui.button(t(Key::No)).clicked() {
                     result = Some(false);
                 }
             });
@@ -2281,7 +2297,7 @@ impl App {
         let Some(err) = &self.error else { return };
         let mut close = false;
         egui::Modal::new(egui::Id::unique("error_modal")).show(ctx, |ui| {
-            ui.heading("Ошибка");
+            ui.heading(t(Key::ErrorTitle));
             ui.label(err);
             if ui.button("OK").clicked() {
                 close = true;
@@ -2498,11 +2514,11 @@ fn plain_chip_colors(ui: &egui::Ui, hovered: bool) -> (Color32, Color32, egui::S
 /// Переключатель канала с крестиком удаления внутри.
 fn channel_chip(ui: &mut egui::Ui, name: &str, on: bool) -> Option<ChipAction> {
     let hint = if on {
-        "Скрыть строки канала (ПКМ — показывать только его)"
+        t(Key::ChannelHideHint)
     } else {
-        "Показывать строки канала (ПКМ — показывать только его)"
+        t(Key::ChannelShowHint)
     };
-    let (resp, x_resp) = x_chip(ui, name, hint, &format!("Перестать слушать «{name}»"), |ui, hovered| {
+    let (resp, x_resp) = x_chip(ui, name, hint, &tf(Key::StopListening, &[name]), |ui, hovered| {
         let (fill, _, stroke) = plain_chip_colors(ui, hovered);
         if on {
             let sel = ui.visuals().selection;
@@ -2513,7 +2529,7 @@ fn channel_chip(ui: &mut egui::Ui, name: &str, on: bool) -> Option<ChipAction> {
     });
     let mut only = false;
     resp.context_menu(|ui| {
-        if ui.button("Показывать только этот канал").clicked() {
+        if ui.button(t(Key::ShowOnlyChannel)).clicked() {
             only = true;
         }
     });
@@ -2585,8 +2601,43 @@ fn setting_row(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui)) 
     });
 }
 
+/// Строка «язык и тема» в настройках: без подписи, две группы сегментов.
+///
+/// Группы выровнены по верху, поэтому их рамки встают на одну горизонталь.
+/// Возвращает рамки групп (тема, язык) — по ним проверяется выравнивание.
+fn interface_row(
+    ui: &mut egui::Ui,
+    theme: &mut UiTheme,
+    lang: &mut Lang,
+) -> (egui::Rect, egui::Rect) {
+    ui.horizontal(|ui| {
+        ui.set_min_height(32.0);
+        ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+            let langs = [
+                (Lang::Ru, Lang::Ru.label(), "Русский"),
+                (Lang::En, Lang::En.label(), "English"),
+            ];
+            let lang_rect = segmented(ui, lang, &langs);
+            ui.add_space(8.0);
+            let themes = UiTheme::ALL.map(|th| (th, th.icon(), th.label()));
+            let theme_rect = segmented(ui, theme, &themes);
+            (theme_rect, lang_rect)
+        })
+        .inner
+    })
+    .inner
+}
+
 /// Ряд кнопок-сегментов в общей рамке; выбранный сегмент подсвечен.
-fn segmented<T: Copy + PartialEq>(ui: &mut egui::Ui, value: &mut T, options: &[(T, RichText, &str)]) {
+///
+/// Сегменты рисуются вручную и всегда одного размера: у иконок и у подписей
+/// разная высота строки, и обычная кнопка сделала бы ряды разной высоты.
+fn segmented<T: Copy + PartialEq>(
+    ui: &mut egui::Ui,
+    value: &mut T,
+    options: &[(T, &str, &str)],
+) -> egui::Rect {
+    const SEG: egui::Vec2 = egui::vec2(36.0, 24.0);
     egui::Frame::new()
         .fill(ui.visuals().extreme_bg_color)
         .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
@@ -2602,19 +2653,42 @@ fn segmented<T: Copy + PartialEq>(ui: &mut egui::Ui, value: &mut T, options: &[(
                 } else {
                     options.iter().collect()
                 };
-                for (v, icon, hint) in ordered {
-                    let r = ui
-                        .add(
-                            egui::Button::selectable(*value == *v, icon.clone().size(18.0))
-                                .min_size(egui::vec2(36.0, 24.0)),
-                        )
-                        .on_hover_text(*hint);
-                    if r.clicked() {
+                for (v, text, hint) in ordered {
+                    let (rect, resp) = ui.allocate_exact_size(SEG, egui::Sense::click());
+                    let resp = resp.on_hover_text(*hint).on_hover_cursor(egui::CursorIcon::PointingHand);
+                    let selected = *value == *v;
+                    if selected {
+                        ui.painter().rect_filled(rect, 4.0, ui.visuals().selection.bg_fill);
+                    } else if resp.hovered() {
+                        ui.painter().rect_filled(rect, 4.0, ui.visuals().widgets.hovered.weak_bg_fill);
+                    }
+                    let color = if selected {
+                        ui.visuals().selection.stroke.color
+                    } else {
+                        ui.visuals().text_color()
+                    };
+                    // Подписи RU/EN мельче пиктограмм: прописные латинские буквы
+                    // того же кегля выглядят крупнее эмодзи.
+                    let size = if text.chars().all(|c| c.is_ascii_uppercase()) {
+                        14.0
+                    } else {
+                        16.0
+                    };
+                    let galley = ui.painter().layout_no_wrap(
+                        (*text).to_owned(),
+                        FontId::proportional(size),
+                        color,
+                    );
+                    let pos = rect.center() - galley.size() / 2.0;
+                    ui.painter().galley(pos, galley, color);
+                    if resp.clicked() {
                         *value = *v;
                     }
                 }
             });
-        });
+        })
+        .response
+        .rect
 }
 
 /// Переключатель «вкл/выкл».
@@ -2638,15 +2712,15 @@ fn toggle_switch(ui: &mut egui::Ui, on: &mut bool) -> egui::Response {
         ui.painter()
             .circle(egui::pos2(x, rect.center().y), 0.75 * radius, v.bg_fill, v.fg_stroke);
     }
-    resp.on_hover_text(if *on { "Вкл." } else { "Выкл." })
+    resp.on_hover_text(if *on { t(Key::On) } else { t(Key::Off) })
 }
 
 fn status_look(s: &ConnStatus) -> (Color32, String) {
     match s {
-        ConnStatus::Disconnected => (GRAY, "отключено".into()),
-        ConnStatus::Connecting => (ORANGE, "подключение…".into()),
-        ConnStatus::Connected => (GREEN, "подключено".into()),
-        ConnStatus::Reconnecting(e) => (ORANGE, format!("переподключение: {e}")),
+        ConnStatus::Disconnected => (GRAY, t(Key::Disconnected).into()),
+        ConnStatus::Connecting => (ORANGE, t(Key::Connecting).into()),
+        ConnStatus::Connected => (GREEN, t(Key::Connected).into()),
+        ConnStatus::Reconnecting(e) => (ORANGE, tf(Key::Reconnecting, &[e])),
     }
 }
 
@@ -2656,7 +2730,7 @@ fn filter_items(ui: &mut egui::Ui, list: &mut Vec<String>, input: &mut String) -
     let mut changed = false;
     let r = ui.add(
         egui::TextEdit::singleline(input)
-            .hint_text("подстрока")
+            .hint_text(t(Key::SubstringHint))
             .desired_width(160.0),
     );
     if enter_pressed(ui, &r) && !input.is_empty() {
@@ -2669,7 +2743,7 @@ fn filter_items(ui: &mut egui::Ui, list: &mut Vec<String>, input: &mut String) -
     }
     let mut i = 0;
     while i < list.len() {
-        let (_, x) = x_chip(ui, &list[i], "", "Убрать", plain_chip_colors);
+        let (_, x) = x_chip(ui, &list[i], "", t(Key::RemoveChip), plain_chip_colors);
         if x.clicked() {
             list.remove(i);
             changed = true;
@@ -2677,7 +2751,7 @@ fn filter_items(ui: &mut egui::Ui, list: &mut Vec<String>, input: &mut String) -
             i += 1;
         }
     }
-    if list.len() > 1 && ui.button("Сбросить").clicked() {
+    if list.len() > 1 && ui.button(t(Key::Reset)).clicked() {
         list.clear();
         changed = true;
     }
@@ -2740,22 +2814,25 @@ fn search_items(
     let any = !search.matches.is_empty();
     if ui
         .add_enabled(any, egui::Button::new("⏶"))
-        .on_hover_text("Предыдущее (Shift+Enter)")
+        .on_hover_text(t(Key::PrevSearchHint))
         .clicked()
     {
         search.step(false);
     }
     if ui
         .add_enabled(any, egui::Button::new("⏷"))
-        .on_hover_text("Следующее (Enter в пустом поле)")
+        .on_hover_text(t(Key::NextSearchHint))
         .clicked()
     {
         search.step(true);
     }
     if !search.query.is_empty() || !search.terms.is_empty() {
         let text = match search.current {
-            Some(c) if any => format!("{} из {}", c + 1, search.matches.len()),
-            _ => "нет совпадений".to_string(),
+            Some(c) if any => tf(
+                Key::MatchOf,
+                &[(c + 1).to_string(), search.matches.len().to_string()],
+            ),
+            _ => t(Key::NoMatches).to_string(),
         };
         ui.label(RichText::new(text).color(GRAY));
     }
@@ -2763,9 +2840,9 @@ fn search_items(
     while i < search.terms.len() {
         let bg = pal.term_bg(i);
         let icons = [
-            ("⏶", "Предыдущее вхождение этого запроса"),
-            ("⏷", "Следующее вхождение этого запроса"),
-            ("✖", "Убрать запрос"),
+            ("⏶", t(Key::PrevMatch)),
+            ("⏷", t(Key::NextMatch)),
+            ("✖", t(Key::RemoveQuery)),
         ];
         let (_, z) = icon_chip(ui, &search.terms[i], "", &icons, |ui, hovered| {
             let stroke = if hovered {
@@ -2789,8 +2866,8 @@ fn search_items(
     }
     if search.terms.len() > 1
         && ui
-            .button("Сбросить")
-            .on_hover_text("Убрать все запросы (Esc в пустом поле)")
+            .button(t(Key::Reset))
+            .on_hover_text(t(Key::ClearAllQueries))
             .clicked()
     {
         search.terms.clear();
@@ -3021,11 +3098,20 @@ fn tail_chip(ui: &mut egui::Ui, following: bool) -> bool {
     response
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .on_hover_text(if following {
-            "Слежение включено: окно держится в конце. Щёлкните, чтобы остаться здесь"
+            t(Key::TailFollowHintOn)
         } else {
-            "Перейти в конец лога и следить за новыми строками"
+            t(Key::TailFollowHintOff)
         })
         .clicked()
+}
+
+/// Подпись режима SSL: в базе хранится техническое значение, в окне — перевод.
+fn ssl_label(m: SslMode) -> &'static str {
+    match m {
+        SslMode::Disable => t(Key::SslDisable),
+        SslMode::Prefer => t(Key::SslPrefer),
+        SslMode::Require => t(Key::SslRequire),
+    }
 }
 
 fn status_dot(ui: &mut egui::Ui, color: Color32) -> egui::Response {
@@ -3041,6 +3127,20 @@ fn format_entry(e: &LogEntry) -> String {
 }
 
 /// 20000 → «20 000».
+/// Язык при старте: сохранённая настройка, иначе автоопределение (и оно сразу сохраняется).
+fn init_language(storage: &Storage) -> Lang {
+    let lang = match storage.setting("language").as_deref().and_then(Lang::from_code) {
+        Some(lang) => lang,
+        None => {
+            let lang = i18n::default_lang();
+            let _ = storage.set_setting("language", lang.code());
+            lang
+        }
+    };
+    i18n::set_current(lang);
+    lang
+}
+
 fn fmt_count(n: usize) -> String {
     let digits = n.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
@@ -3165,6 +3265,27 @@ mod tests {
     fn channel_chip_click_zones() {
         assert_eq!(click_chip(0.2), Some("toggle"));
         assert_eq!(click_chip(0.95), Some("remove"));
+    }
+
+    #[test]
+    fn interface_row_selectors_are_aligned() {
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let mut theme = UiTheme::Dark;
+                let mut lang = Lang::Ru;
+                let (theme_rect, lang_rect) = interface_row(ui, &mut theme, &mut lang);
+                assert!(
+                    (theme_rect.top() - lang_rect.top()).abs() < 0.01,
+                    "tops differ: theme {theme_rect:?}, lang {lang_rect:?}"
+                );
+                assert!(
+                    (theme_rect.height() - lang_rect.height()).abs() < 0.01,
+                    "heights differ: theme {theme_rect:?}, lang {lang_rect:?}"
+                );
+            });
+        });
+        out.textures_delta.clear();
     }
 
     #[test]

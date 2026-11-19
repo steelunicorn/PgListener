@@ -4,12 +4,14 @@
 mod app;
 mod bridge;
 mod crypto;
+mod i18n;
 mod logfile;
 mod model;
 mod storage;
 mod tray;
 mod worker;
 
+use crate::i18n::{Key, tf};
 use std::path::PathBuf;
 
 /// Каталог исполняемого файла: здесь лежат база настроек и папка logs (portable-режим).
@@ -43,7 +45,7 @@ fn run(renderer: eframe::Renderer) -> eframe::Result {
                 .enable_all()
                 .build()?;
             let storage = storage::Storage::open(&app_dir().join("pglistener.db"))
-                .map_err(|e| format!("Не удалось открыть pglistener.db: {e:#}"))?;
+                .map_err(|e| tf(Key::DbOpenFailed, &[&format!("{e:#}")]))?;
             Ok(Box::new(app::App::new(cc, rt, storage)))
         }),
     )
@@ -65,7 +67,7 @@ fn main() {
                 | eframe::Error::NoGlutinConfigs(..)
                 | eframe::Error::OpenGL(_)),
             ) => {
-                eprintln!("OpenGL недоступен ({e}), переключаюсь на DirectX 12");
+                eprintln!("{}", tf(Key::OpenGlUnavailable, &[&e.to_string()]));
                 run(eframe::Renderer::Wgpu)
             }
             r => r,

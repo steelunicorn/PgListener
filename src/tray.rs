@@ -1,6 +1,7 @@
 //! Значок в области уведомлений (только Windows) и иконка приложения.
 
 use std::sync::mpsc;
+use crate::i18n::{Key, t};
 
 #[cfg_attr(not(windows), allow(dead_code))]
 pub enum TrayCmd {
@@ -39,8 +40,8 @@ impl Tray {
         use tray_icon::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
         let menu = Menu::new();
-        let show = MenuItem::new("Показать", true, None);
-        let quit = MenuItem::new("Выход", true, None);
+        let show = MenuItem::new(t(Key::Show), true, None);
+        let quit = MenuItem::new(t(Key::Quit), true, None);
         menu.append_items(&[&show, &PredefinedMenuItem::separator(), &quit])
             .ok()?;
 
